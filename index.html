@@ -1,0 +1,1086 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Планировщик рейсов судов</title>
+<style>
+  :root {
+    --bg: #f3f5f8;
+    --panel: #ffffff;
+    --border: #d9dee5;
+    --text: #1f2933;
+    --muted: #6b7684;
+    --accent: #1d5fa8;
+    --accent-soft: #e6effa;
+    --danger: #c92a2a;
+    --warn-bg: #fff4e0;
+    --warn-border: #f0b44c;
+    --c-load: #2f9e44;
+    --c-unload: #1c7ed6;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    font-family: "Segoe UI", Roboto, Arial, sans-serif;
+    font-size: 14px;
+    color: var(--text);
+    background: var(--bg);
+  }
+  button, input, select { font: inherit; color: inherit; }
+  button {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 5px 10px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  button:hover { border-color: var(--accent); color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.primary:hover { filter: brightness(1.1); color: #fff; }
+  button.danger:hover { border-color: var(--danger); color: var(--danger); }
+  button.icon { padding: 2px 7px; min-width: 28px; }
+  button.link { border: none; background: none; color: var(--accent); padding: 0 4px; text-decoration: underline; }
+  input[type=text], input[type=datetime-local], select {
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 4px 6px;
+    background: #fff;
+    min-width: 0;
+  }
+  input:focus, select:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+  input[type=color] { width: 40px; height: 28px; padding: 0 2px; border: 1px solid var(--border); border-radius: 5px; background: #fff; }
+  input.num-in { width: 64px; text-align: right; }
+
+  .app-header {
+    display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;
+    padding: 10px 16px; background: #14375e; color: #fff;
+  }
+  .brand { font-size: 18px; font-weight: 600; letter-spacing: .2px; }
+  .hdr-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .hdr-actions button { background: rgba(255,255,255,.1); border-color: rgba(255,255,255,.3); color: #fff; }
+  .hdr-actions button:hover { background: rgba(255,255,255,.2); color: #fff; border-color: #fff; }
+  #saveStatus { font-size: 12px; opacity: .75; min-width: 90px; }
+
+  .layout { display: grid; grid-template-columns: 440px minmax(0, 1fr); gap: 14px; padding: 14px 16px; align-items: start; }
+  @media (max-width: 1000px) { .layout { grid-template-columns: minmax(0, 1fr); } }
+
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; }
+  aside.panel { overflow: hidden; }
+  .tabs { display: flex; border-bottom: 1px solid var(--border); background: #f8fafc; overflow-x: auto; }
+  .tab { border: none; border-radius: 0; background: none; padding: 10px 14px; border-bottom: 2px solid transparent; color: var(--muted); }
+  .tab.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; background: #fff; }
+  .tab-body { padding: 14px; }
+  .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+  .row > select { flex: 1; }
+  .form-grid { display: grid; grid-template-columns: 90px 1fr; gap: 8px 10px; align-items: center; margin-bottom: 12px; }
+  .form-grid label { color: var(--muted); }
+  h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); margin: 16px 0 8px; }
+  .muted { color: var(--muted); font-size: 12px; }
+  .hint { color: var(--muted); font-size: 12px; margin: 6px 0 10px; line-height: 1.4; }
+
+  .stops { display: flex; flex-direction: column; }
+  .stop {
+    display: flex; gap: 8px; align-items: flex-start;
+    border: 1px solid var(--border); border-radius: 8px; padding: 8px; background: #fbfcfd;
+  }
+  .stop.drag-over { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+  .stop.dragging { opacity: .4; }
+  .handle { cursor: grab; color: #9aa5b1; font-size: 16px; line-height: 28px; user-select: none; padding: 0 2px; }
+  .num { font-weight: 600; min-width: 18px; line-height: 28px; color: var(--accent); }
+  .stop-main { flex: 1; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+  .stop-main .line { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .stop-main select { flex: 1; min-width: 110px; }
+  .stop-btns { display: flex; flex-direction: column; gap: 3px; }
+  .stop-btns button { padding: 0 6px; font-size: 11px; line-height: 18px; }
+  .transit {
+    margin: 4px 0 4px 34px; padding: 5px 8px; font-size: 13px;
+    border-left: 3px solid #cbd3dc; display: flex; gap: 6px; flex-wrap: wrap; align-items: center;
+  }
+  .transit.warn { background: var(--warn-bg); border-left-color: var(--warn-border); border-radius: 0 6px 6px 0; }
+  .summary { margin-top: 12px; padding: 10px; background: var(--accent-soft); border-radius: 8px; line-height: 1.6; }
+  .warnbox { margin-top: 8px; padding: 8px 10px; background: var(--warn-bg); border: 1px solid var(--warn-border); border-radius: 8px; font-size: 13px; }
+
+  table.grid { width: 100%; border-collapse: collapse; }
+  table.grid th, table.grid td { border-bottom: 1px solid #edf0f3; padding: 5px 4px; text-align: left; vertical-align: middle; }
+  table.grid th { font-size: 12px; color: var(--muted); font-weight: 600; }
+  table.grid input[type=text] { width: 100%; }
+  table.grid input.num-in { width: 60px; }
+  table.grid td.r, table.grid th.r { text-align: right; }
+  .leg-note { font-size: 11px; color: var(--muted); }
+  .leg-note.bad { color: var(--danger); }
+
+  main { min-width: 0; display: flex; flex-direction: column; gap: 14px; }
+  .toolbar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; padding: 8px 12px; }
+  .seg { display: inline-flex; }
+  .seg button { border-radius: 0; }
+  .seg button:first-child { border-radius: 6px 0 0 6px; }
+  .seg button:last-child { border-radius: 0 6px 6px 0; margin-left: -1px; }
+  .seg button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .chart-wrap { overflow: auto; max-height: 70vh; padding: 0; }
+  #chart { position: relative; }
+  #chart svg { display: block; }
+  #chart svg.sticky-labels { position: sticky; left: 0; z-index: 2; box-shadow: 2px 0 4px rgba(0,0,0,.06); }
+  #chart .blk { cursor: pointer; }
+
+  .table-section { padding: 12px 14px; }
+  .table-section h2 { font-size: 16px; margin: 0 0 4px; }
+  .table-section table.grid td { font-size: 13px; }
+  .table-section tfoot td { font-weight: 600; border-top: 2px solid var(--border); border-bottom: none; }
+  .sw { display: inline-block; width: 14px; height: 12px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+
+  #tooltip {
+    position: fixed; pointer-events: none; z-index: 50; display: none;
+    background: rgba(24,32,44,.95); color: #fff; padding: 8px 10px; border-radius: 6px;
+    font-size: 12px; line-height: 1.5; max-width: 320px; box-shadow: 0 4px 14px rgba(0,0,0,.25);
+  }
+  #tooltip b { font-size: 13px; }
+  .print-title { display: none; }
+
+  @media print {
+    @page { size: A4 landscape; margin: 10mm; }
+    body { background: #fff; font-size: 11px; }
+    .app-header, aside, .toolbar, .no-print, #tooltip { display: none !important; }
+    .layout { display: block; padding: 0; }
+    .panel { border: none; }
+    .chart-wrap { overflow: visible; max-height: none; }
+    #chart { width: auto !important; }
+    #chart svg { width: 100% !important; height: auto !important; }
+    #chart svg.sticky-labels { display: none !important; }
+    .print-title { display: block; font-size: 15px; font-weight: 600; margin-bottom: 6px; }
+    .table-section { padding: 0; margin-top: 10px; page-break-inside: auto; }
+    table.grid tr { page-break-inside: avoid; }
+    * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  }
+</style>
+</head>
+<body>
+
+<header class="app-header">
+  <div class="brand">⚓ Планировщик рейсов судов</div>
+  <div class="hdr-actions">
+    <button data-act="export-json" title="Сохранить все данные в файл">Экспорт JSON</button>
+    <button data-act="import-json" title="Загрузить данные из файла">Импорт JSON</button>
+    <input type="file" id="fileInput" accept=".json,application/json" hidden>
+    <button data-act="export-png" title="Сохранить график картинкой">Экспорт PNG</button>
+    <button data-act="print" title="Печать или сохранение в PDF (альбомная ориентация)">Печать / PDF</button>
+    <button data-act="reset-demo" title="Заменить данные демонстрационными">Демо-данные</button>
+    <span id="saveStatus"></span>
+  </div>
+</header>
+
+<div class="layout">
+  <aside class="panel" id="sidebar"></aside>
+  <main>
+    <div class="print-title" id="printTitle"></div>
+    <div class="panel toolbar">
+      <span class="muted">Масштаб:</span>
+      <span class="seg" id="scaleSeg">
+        <button data-act="scale" data-scale="day">Дни</button>
+        <button data-act="scale" data-scale="week">Недели</button>
+      </span>
+      <button data-act="scroll-today">К сегодняшнему дню</button>
+      <button data-act="add-deadline">+ Линия-дедлайн</button>
+      <span class="muted">Щелчок по блоку открывает рейс для редактирования</span>
+    </div>
+    <div class="panel chart-wrap" id="chartWrap"><div id="chart"></div></div>
+    <section class="panel table-section" id="tableSection"></section>
+  </main>
+</div>
+
+<div id="tooltip"></div>
+
+<script>
+(function () {
+  'use strict';
+
+  /* ================= Константы и утилиты ================= */
+  const DAY = 86400000;
+  const STORE_KEY = 'vesselGanttPlanner.v1';
+  const OPS = { load: 'Погрузка', unload: 'Выгрузка', both: 'Погрузка + выгрузка', call: 'Без операций (заход)' };
+  const STAGE = {
+    transit: 'Переход', load: 'Погрузка', unload: 'Выгрузка',
+    reserve: 'Запас (очередь, непогода)', call: 'Заход (без операций)'
+  };
+  const COLORS = { load: '#2f9e44', unload: '#1c7ed6' };
+  const SHIP_PALETTE = ['#e8590c', '#7048e8', '#d6336c', '#0c8599', '#5c940d', '#862e9c', '#e67700', '#364fc7'];
+  const MONTHS = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
+  const WD = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
+  const NUM_FIELDS = new Set(['load', 'unload', 'days', 'reserve', 'transit']);
+
+  const $ = (s, r = document) => r.querySelector(s);
+  const uid = () => Math.random().toString(36).slice(2, 10);
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const pad = n => String(n).padStart(2, '0');
+
+  function parseNum(v) {
+    if (v == null) return null;
+    if (typeof v === 'number') return isFinite(v) ? v : null;
+    const s = String(v).replace(/\s/g, '').replace(',', '.');
+    if (s === '') return null;
+    const n = parseFloat(s);
+    return isFinite(n) ? n : null;
+  }
+  const num0 = v => { const n = parseNum(v); return n != null && n > 0 ? n : 0; };
+  function fmtNum(n) {
+    if (n == null || !isFinite(n)) return '—';
+    return (Math.round(n * 100) / 100).toLocaleString('ru-RU', { maximumFractionDigits: 2 });
+  }
+  const fmtIn = n => (n == null || n === '' ? '' : String(n).replace('.', ','));
+  const fmtDays = n => fmtNum(n) + ' сут.';
+  function fmtHours(days) {
+    const h = Math.round(days * 24 * 10) / 10;
+    return h.toLocaleString('ru-RU') + ' ч';
+  }
+  function parseDT(s) {
+    if (!s) return NaN;
+    const m = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2}))?/.exec(s);
+    if (!m) return NaN;
+    return new Date(+m[1], +m[2] - 1, +m[3], +(m[4] || 0), +(m[5] || 0)).getTime();
+  }
+  function toDTInput(t) {
+    const d = new Date(t);
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+  function fmtDT(t) {
+    const d = new Date(t);
+    return `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+  function fmtD(t) { const d = new Date(t); return `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()}`; }
+  function sod(t) { const d = new Date(t); d.setHours(0, 0, 0, 0); return d.getTime(); }
+  function mondayOf(t) { const d = new Date(sod(t)); const wd = (d.getDay() + 6) % 7; d.setDate(d.getDate() - wd); return d.getTime(); }
+  function addDaysCal(t, n) { const d = new Date(t); d.setDate(d.getDate() + n); return d.getTime(); }
+  function isoWeek(t) {
+    const d = new Date(sod(t)); d.setDate(d.getDate() + 3 - (d.getDay() + 6) % 7);
+    const w1 = new Date(d.getFullYear(), 0, 4);
+    return 1 + Math.round(((d - w1) / DAY - 3 + (w1.getDay() + 6) % 7) / 7);
+  }
+  function tint(hex, k) { // смешать цвет с белым (k=0..1 доля белого)
+    const m = /^#?([0-9a-f]{6})$/i.exec(hex || ''); if (!m) return hex;
+    const n = parseInt(m[1], 16); const r = n >> 16, g = (n >> 8) & 255, b = n & 255;
+    const f = c => Math.round(c + (255 - c) * k);
+    return '#' + [f(r), f(g), f(b)].map(c => c.toString(16).padStart(2, '0')).join('');
+  }
+
+  /* ================= Данные ================= */
+  function demoData() {
+    const P = (name, load, unload) => ({ id: uid(), name, load, unload });
+    const arh = P('Архангельск', 2, 1.5), mur = P('Мурманск', 1.5, 1), sab = P('Сабетта', 1, 1.5), dud = P('Дудинка', 2, 2.5);
+    const L = (a, b, days) => ({ id: uid(), from: a.id, to: b.id, days });
+    const s1 = { id: uid(), name: 'Северное сияние', color: '#e8590c' };
+    const s2 = { id: uid(), name: 'Полярная звезда', color: '#7048e8' };
+    const start = sod(Date.now()) - 2 * DAY + 8 * 3600000;
+    const S = (p, op, reserve) => ({ id: uid(), portId: p.id, op, reserve: reserve || null, transit: null });
+    const voyage = {
+      id: uid(), name: 'Рейс 1 — Карское море', shipId: s1.id, start: toDTInput(start),
+      stops: [S(arh, 'load', 0.5), S(mur, 'call'), S(sab, 'both', 1), S(dud, 'unload', 1), S(arh, 'call')]
+    };
+    return {
+      version: 1,
+      ports: [arh, mur, sab, dud],
+      legs: [L(arh, mur, 1.5), L(mur, sab, 3), L(sab, dud, 1.5), L(arh, dud, 4.5), L(dud, arh, 5)],
+      ships: [s1, s2],
+      voyages: [voyage],
+      deadlines: [{ id: uid(), date: toDTInput(sod(start) + 24 * DAY), label: 'Окончание навигации', color: '#c92a2a' }],
+      settings: { scale: 'day', sel: voyage.id, tab: 'voyage' }
+    };
+  }
+
+  function normalize(d) {
+    if (!d || typeof d !== 'object') throw new Error('Неверный формат');
+    for (const k of ['ports', 'legs', 'ships', 'voyages']) if (!Array.isArray(d[k])) throw new Error('Нет раздела «' + k + '»');
+    d.deadlines = Array.isArray(d.deadlines) ? d.deadlines : [];
+    d.settings = Object.assign({ scale: 'day', sel: null, tab: 'voyage' }, d.settings || {});
+    d.ports.forEach(p => { p.id = p.id || uid(); p.name = p.name || 'Порт'; });
+    d.legs.forEach(l => { l.id = l.id || uid(); });
+    d.ships.forEach((s, i) => { s.id = s.id || uid(); s.color = s.color || SHIP_PALETTE[i % SHIP_PALETTE.length]; });
+    d.deadlines.forEach(x => { x.id = x.id || uid(); x.color = x.color || '#c92a2a'; });
+    d.voyages.forEach(v => {
+      v.id = v.id || uid(); v.stops = Array.isArray(v.stops) ? v.stops : [];
+      v.stops.forEach(s => { s.id = s.id || uid(); s.op = OPS[s.op] ? s.op : 'call'; });
+    });
+    if (!d.voyages.some(v => v.id === d.settings.sel)) d.settings.sel = d.voyages[0] ? d.voyages[0].id : null;
+    return d;
+  }
+
+  let state;
+  try {
+    const raw = localStorage.getItem(STORE_KEY);
+    state = raw ? normalize(JSON.parse(raw)) : demoData();
+  } catch (e) { state = demoData(); }
+
+  let saveTimer = null;
+  function save() {
+    try {
+      localStorage.setItem(STORE_KEY, JSON.stringify(state));
+      const el = $('#saveStatus'); el.textContent = '✓ Сохранено';
+      clearTimeout(saveTimer); saveTimer = setTimeout(() => { el.textContent = ''; }, 1500);
+    } catch (e) { $('#saveStatus').textContent = '⚠ Не удалось сохранить'; }
+  }
+
+  const portById = id => state.ports.find(p => p.id === id);
+  const shipById = id => state.ships.find(s => s.id === id);
+  const portName = id => { const p = portById(id); return p ? p.name : '(порт удалён)'; };
+  const selVoyage = () => state.voyages.find(v => v.id === state.settings.sel) || null;
+
+  /* Поиск перехода: сначала точное направление, затем обратное (A→B = B→A по умолчанию) */
+  function findLeg(from, to) {
+    const exact = state.legs.find(l => l.from === from && l.to === to && parseNum(l.days) != null);
+    if (exact) return { days: parseNum(exact.days), dir: 'exact', leg: exact };
+    const rev = state.legs.find(l => l.from === to && l.to === from && parseNum(l.days) != null);
+    if (rev) return { days: parseNum(rev.days), dir: 'reverse', leg: rev };
+    return null;
+  }
+
+  function transitInfo(prev, s) {
+    if (prev.portId === s.portId) return { days: 0, source: 'same' };
+    const manual = parseNum(s.transit);
+    const ref = findLeg(prev.portId, s.portId);
+    if (manual != null && manual >= 0) return { days: manual, source: 'manual', ref };
+    if (ref) return { days: ref.days, source: 'ref', ref };
+    return { days: 0, source: 'missing' };
+  }
+
+  /* ================= Расчёт рейса ================= */
+  function computeVoyage(v) {
+    const segs = [], warnings = [];
+    let t = parseDT(v.start);
+    if (isNaN(t)) { t = sod(Date.now()); warnings.push('Не задана дата начала рейса.'); }
+    const t0 = t;
+    const totals = { transit: 0, ops: 0, reserve: 0 };
+    const stopTimes = [];
+    v.stops.forEach((s, i) => {
+      const port = portById(s.portId);
+      const pn = port ? port.name : '(порт удалён)';
+      if (!port) warnings.push(`Порт №${i + 1} удалён из справочника.`);
+      if (i > 0) {
+        const prev = v.stops[i - 1];
+        const ti = transitInfo(prev, s);
+        if (ti.source === 'missing') warnings.push(`Нет перехода ${portName(prev.portId)} → ${pn} в справочнике — время перехода принято за 0.`);
+        if (ti.days > 0) {
+          segs.push({ type: 'transit', start: t, end: t + ti.days * DAY, days: ti.days, from: prev.portId, to: s.portId, place: `${portName(prev.portId)} → ${pn}`, toName: pn, source: ti.source, stopId: s.id });
+          totals.transit += ti.days;
+        }
+        t += ti.days * DAY;
+      }
+      const arrive = t;
+      const res = num0(s.reserve);
+      const ops = s.op === 'both' ? ['unload', 'load'] : s.op === 'call' ? [] : [s.op];
+      if (res > 0) {
+        segs.push({ type: 'reserve', colorOf: ops[0] || 'call', start: t, end: t + res * DAY, days: res, place: pn, stopId: s.id });
+        t += res * DAY; totals.reserve += res;
+      }
+      if (s.op === 'call') segs.push({ type: 'call', start: t, end: t, days: 0, place: pn, stopId: s.id });
+      ops.forEach(op => {
+        const d = port ? num0(op === 'load' ? port.load : port.unload) : 0;
+        if (port && d === 0) warnings.push(`У порта ${pn} не задан норматив: ${op === 'load' ? 'погрузка' : 'выгрузка'}.`);
+        segs.push({ type: op, start: t, end: t + d * DAY, days: d, place: pn, stopId: s.id });
+        t += d * DAY; totals.ops += d;
+      });
+      stopTimes.push({ arrive, depart: t });
+    });
+    return { segs, start: t0, end: t, days: (t - t0) / DAY, warnings, totals, stopTimes };
+  }
+
+  /* ================= Боковая панель ================= */
+  const TABS = [['voyage', 'Рейс'], ['ports', 'Порты'], ['legs', 'Переходы'], ['ships', 'Суда'], ['lines', 'Линии']];
+
+  function renderSidebar() {
+    const active = document.activeElement;
+    const focusKey = active && active.dataset ? active.dataset.k : null;
+    const tab = state.settings.tab || 'voyage';
+    const views = { voyage: viewVoyage, ports: viewPorts, legs: viewLegs, ships: viewShips, lines: viewLines };
+    $('#sidebar').innerHTML =
+      `<div class="tabs">${TABS.map(([k, t]) => `<button class="tab ${tab === k ? 'active' : ''}" data-act="tab" data-tab="${k}">${t}</button>`).join('')}</div>` +
+      `<div class="tab-body">${(views[tab] || viewVoyage)()}</div>`;
+    if (focusKey) {
+      const el = $(`#sidebar [data-k="${CSS.escape(focusKey)}"]`);
+      if (el) el.focus();
+    }
+  }
+
+  const portOptions = sel => state.ports.map(p => `<option value="${p.id}" ${p.id === sel ? 'selected' : ''}>${esc(p.name)}</option>`).join('');
+
+  function viewVoyage() {
+    const v = selVoyage();
+    let h = `<div class="row">
+      <select data-k="sel" title="Выбор рейса">${state.voyages.map(x => `<option value="${x.id}" ${v && x.id === v.id ? 'selected' : ''}>${esc(x.name || 'Без названия')}${shipById(x.shipId) ? ' — ' + esc(shipById(x.shipId).name) : ''}</option>`).join('') || '<option>— нет рейсов —</option>'}</select>
+      <button class="primary" data-act="voy-add">+ Новый</button>
+      <button data-act="voy-copy" ${v ? '' : 'disabled'} title="Создать копию рейса">Копия</button>
+      <button class="danger" data-act="voy-del" ${v ? '' : 'disabled'}>Удалить</button>
+    </div>`;
+    if (!v) return h + '<p class="hint">Рейсов пока нет. Нажмите «+ Новый», чтобы спланировать рейс.</p>';
+    const c = computeVoyage(v);
+    h += `<div class="form-grid">
+      <label>Название</label><input type="text" data-k="voy:${v.id}:name" value="${esc(v.name)}">
+      <label>Судно</label><select data-k="voy:${v.id}:shipId">${state.ships.map(s => `<option value="${s.id}" ${s.id === v.shipId ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}${shipById(v.shipId) ? '' : '<option value="" selected>— выберите судно —</option>'}</select>
+      <label>Начало</label><input type="datetime-local" data-k="voy:${v.id}:start" value="${esc(v.start)}">
+    </div>
+    <h3>Маршрут</h3>
+    <div class="stops" id="stops">`;
+    v.stops.forEach((s, i) => {
+      if (i > 0) h += transitHtml(v.stops[i - 1], s);
+      const port = portById(s.portId);
+      const st = c.stopTimes[i];
+      let norm = '';
+      if (port) {
+        if (s.op === 'load') norm = `погрузка ${fmtDays(num0(port.load))}`;
+        else if (s.op === 'unload') norm = `выгрузка ${fmtDays(num0(port.unload))}`;
+        else if (s.op === 'both') norm = `выгрузка ${fmtDays(num0(port.unload))} + погрузка ${fmtDays(num0(port.load))}`;
+        else norm = 'без грузовых операций';
+      }
+      h += `<div class="stop" data-stop="${s.id}">
+        <span class="handle" title="Перетащите, чтобы изменить порядок">⋮⋮</span>
+        <span class="num">${i + 1}</span>
+        <div class="stop-main">
+          <div class="line">
+            <select data-k="stop:${s.id}:portId">${portOptions(s.portId)}${port ? '' : '<option value="" selected>— порт удалён —</option>'}</select>
+            <select data-k="stop:${s.id}:op">${Object.entries(OPS).map(([k, t]) => `<option value="${k}" ${k === s.op ? 'selected' : ''}>${t}</option>`).join('')}</select>
+          </div>
+          <div class="line">
+            <label>Запас <input type="text" inputmode="decimal" class="num-in" data-k="stop:${s.id}:reserve" value="${fmtIn(s.reserve)}" placeholder="0"> сут.</label>
+            <span class="muted">${norm}</span>
+          </div>
+          <div class="muted">${st ? `Приход ${fmtDT(st.arrive)} · отход ${fmtDT(st.depart)}` : ''}</div>
+        </div>
+        <div class="stop-btns">
+          <button data-act="stop-up" data-id="${s.id}" title="Выше" ${i === 0 ? 'disabled' : ''}>▲</button>
+          <button data-act="stop-down" data-id="${s.id}" title="Ниже" ${i === v.stops.length - 1 ? 'disabled' : ''}>▼</button>
+          <button class="danger" data-act="stop-del" data-id="${s.id}" title="Удалить порт из маршрута">✕</button>
+        </div>
+      </div>`;
+    });
+    h += `</div>`;
+    if (!v.stops.length) h += '<p class="hint">Маршрут пуст. Добавьте первый порт.</p>';
+    h += `<div class="row" style="margin-top:10px">
+      <select id="addPortSel">${portOptions(state.settings.lastAddPort)}</select>
+      <button class="primary" data-act="stop-add" ${state.ports.length ? '' : 'disabled'}>+ Добавить порт</button>
+    </div>`;
+    if (v.stops.length) {
+      h += `<div class="summary">
+        <b>Итого по рейсу: ${fmtDays(c.days)}</b> (${fmtHours(c.days)})<br>
+        Окончание: <b>${fmtDT(c.end)}</b><br>
+        <span class="muted">В пути ${fmtDays(c.totals.transit)} · грузовые операции ${fmtDays(c.totals.ops)} · запас ${fmtDays(c.totals.reserve)}</span>
+      </div>`;
+    }
+    const w = c.warnings.concat(deadlineWarnings(c));
+    if (w.length) h += `<div class="warnbox">⚠ ${w.map(esc).join('<br>⚠ ')}</div>`;
+    return h;
+  }
+
+  function deadlineWarnings(c) {
+    return state.deadlines.filter(d => { const t = parseDT(d.date); return !isNaN(t) && c.end > t && c.start < t; })
+      .map(d => `Рейс заканчивается позже линии «${d.label || 'дедлайн'}» (${fmtDT(parseDT(d.date))}).`);
+  }
+
+  function transitHtml(prev, s) {
+    const a = esc(portName(prev.portId)), b = esc(portName(s.portId));
+    const ti = transitInfo(prev, s);
+    if (ti.source === 'same') return `<div class="transit muted">↓ тот же порт — перехода нет</div>`;
+    const input = ph => `<input type="text" inputmode="decimal" class="num-in" data-k="stop:${s.id}:transit" value="${fmtIn(s.transit)}" placeholder="${ph}">`;
+    if (ti.ref) {
+      const refTxt = fmtNum(ti.ref.days) + (ti.ref.dir === 'reverse' ? ', по обратному направлению' : '');
+      return `<div class="transit">↓ Переход ${a} → ${b}: ${input(fmtIn(ti.ref.days))} сут.
+        <span class="muted">${ti.source === 'manual' ? `вручную (в справочнике ${refTxt})` : `из справочника${ti.ref.dir === 'reverse' ? ' (обратное направление)' : ''}`}</span>
+        ${ti.source === 'manual' ? `<button class="link" data-act="transit-reset" data-id="${s.id}">вернуть из справочника</button>` : ''}</div>`;
+    }
+    return `<div class="transit warn">⚠ Перехода ${a} → ${b} нет в справочнике. Время: ${input('?')} сут.
+      ${ti.source === 'manual' ? `<button class="link" data-act="transit-save" data-id="${s.id}">сохранить в справочник</button>` : '<span class="muted">введите значение</span>'}</div>`;
+  }
+
+  function viewPorts() {
+    return `<p class="hint">Нормативы — в сутках, можно дробные (например, 1,5).</p>
+    <table class="grid"><thead><tr><th>Порт</th><th class="r">Погрузка, сут.</th><th class="r">Выгрузка, сут.</th><th></th></tr></thead><tbody>
+    ${state.ports.map(p => `<tr>
+      <td><input type="text" data-k="port:${p.id}:name" value="${esc(p.name)}"></td>
+      <td class="r"><input type="text" inputmode="decimal" class="num-in" data-k="port:${p.id}:load" value="${fmtIn(p.load)}"></td>
+      <td class="r"><input type="text" inputmode="decimal" class="num-in" data-k="port:${p.id}:unload" value="${fmtIn(p.unload)}"></td>
+      <td><button class="icon danger" data-act="port-del" data-id="${p.id}" title="Удалить">✕</button></td></tr>`).join('')}
+    </tbody></table>
+    <div class="row" style="margin-top:10px"><button class="primary" data-act="port-add">+ Добавить порт</button></div>`;
+  }
+
+  function viewLegs() {
+    const rows = state.legs.map(l => {
+      const dup = state.legs.some(o => o !== l && o.from === l.from && o.to === l.to);
+      const rev = state.legs.find(o => o.from === l.to && o.to === l.from);
+      let note;
+      if (l.from === l.to) note = `<span class="leg-note bad">порт отправления и назначения совпадают</span>`;
+      else if (dup) note = `<span class="leg-note bad">дубликат — используется первая запись</span>`;
+      else if (rev) note = `<span class="leg-note">обратный переход задан отдельно (${fmtDays(parseNum(rev.days))})</span>`;
+      else note = `<span class="leg-note">обратно (${esc(portName(l.to))} → ${esc(portName(l.from))}) — так же · <button class="link" data-act="leg-reverse" data-id="${l.id}">задать отдельно</button></span>`;
+      return `<tr>
+        <td><select data-k="leg:${l.id}:from">${portOptions(l.from)}</select></td>
+        <td>→</td>
+        <td><select data-k="leg:${l.id}:to">${portOptions(l.to)}</select></td>
+        <td class="r"><input type="text" inputmode="decimal" class="num-in" data-k="leg:${l.id}:days" value="${fmtIn(l.days)}"></td>
+        <td><button class="icon danger" data-act="leg-del" data-id="${l.id}" title="Удалить">✕</button></td></tr>
+        <tr><td colspan="5" style="padding-top:0">${note}</td></tr>`;
+    }).join('');
+    return `<p class="hint">Время перехода в сутках. По умолчанию переход A→B действует и в обратную сторону (B→A); при необходимости задайте обратный переход отдельной строкой.</p>
+    <table class="grid"><thead><tr><th>Откуда</th><th></th><th>Куда</th><th class="r">Сут.</th><th></th></tr></thead><tbody>${rows}</tbody></table>
+    <div class="row" style="margin-top:10px"><button class="primary" data-act="leg-add" ${state.ports.length > 1 ? '' : 'disabled'}>+ Добавить переход</button></div>`;
+  }
+
+  function viewShips() {
+    return `<p class="hint">Цвет судна используется для его переходов, рамки рейса и строки на графике.</p>
+    <table class="grid"><thead><tr><th>Судно</th><th>Цвет</th><th class="r">Рейсов</th><th></th></tr></thead><tbody>
+    ${state.ships.map(s => `<tr>
+      <td><input type="text" data-k="ship:${s.id}:name" value="${esc(s.name)}"></td>
+      <td><input type="color" data-k="ship:${s.id}:color" value="${esc(s.color)}"></td>
+      <td class="r">${state.voyages.filter(v => v.shipId === s.id).length}</td>
+      <td><button class="icon danger" data-act="ship-del" data-id="${s.id}" title="Удалить">✕</button></td></tr>`).join('')}
+    </tbody></table>
+    <div class="row" style="margin-top:10px"><button class="primary" data-act="ship-add">+ Добавить судно</button></div>`;
+  }
+
+  function viewLines() {
+    return `<p class="hint">Вертикальные линии на графике: окончание навигации, сроки контракта и т.п.</p>
+    ${state.deadlines.map(d => `<div class="stop" style="margin-bottom:8px">
+      <div class="stop-main">
+        <div class="line"><input type="text" data-k="dl:${d.id}:label" value="${esc(d.label)}" placeholder="Подпись" style="flex:1"><input type="color" data-k="dl:${d.id}:color" value="${esc(d.color)}"></div>
+        <div class="line"><input type="datetime-local" data-k="dl:${d.id}:date" value="${esc(d.date)}"></div>
+      </div>
+      <div class="stop-btns"><button class="danger" data-act="dl-del" data-id="${d.id}" title="Удалить">✕</button></div>
+    </div>`).join('') || '<p class="hint">Линий нет.</p>'}
+    <div class="row"><button class="primary" data-act="add-deadline">+ Добавить линию</button></div>`;
+  }
+
+  /* ================= Применение правок из полей ================= */
+  function findStop(id) {
+    for (const v of state.voyages) { const i = v.stops.findIndex(s => s.id === id); if (i >= 0) return { v, i, s: v.stops[i] }; }
+    return null;
+  }
+  function applyField(el) {
+    const key = el.dataset.k;
+    if (key === 'sel') { state.settings.sel = el.value; return; }
+    const [kind, id, field] = key.split(':');
+    let obj = null;
+    if (kind === 'voy') obj = state.voyages.find(x => x.id === id);
+    else if (kind === 'stop') { const f = findStop(id); obj = f && f.s; }
+    else if (kind === 'port') obj = portById(id);
+    else if (kind === 'leg') obj = state.legs.find(x => x.id === id);
+    else if (kind === 'ship') obj = shipById(id);
+    else if (kind === 'dl') obj = state.deadlines.find(x => x.id === id);
+    if (!obj) return;
+    if (NUM_FIELDS.has(field)) {
+      const n = parseNum(el.value);
+      obj[field] = n != null && n >= 0 ? n : null;
+    } else obj[field] = el.value;
+  }
+
+  const sidebar = $('#sidebar');
+  sidebar.addEventListener('input', e => {
+    const el = e.target; if (!el.dataset || !el.dataset.k) return;
+    applyField(el); save(); renderChart(); renderTable();
+  });
+  sidebar.addEventListener('change', e => {
+    const el = e.target;
+    if (el.id === 'addPortSel') { state.settings.lastAddPort = el.value; save(); return; }
+    if (!el.dataset || !el.dataset.k) return;
+    applyField(el); save();
+    setTimeout(renderAll, 0); // после перехода фокуса — чтобы восстановить его
+  });
+
+  /* ---------- Перетаскивание портов маршрута ---------- */
+  let dragId = null;
+  sidebar.addEventListener('mousedown', e => {
+    const h = e.target.closest('.handle'); if (!h) return;
+    h.closest('.stop').setAttribute('draggable', 'true');
+  });
+  sidebar.addEventListener('mouseup', e => {
+    const st = e.target.closest('.stop'); if (st) st.removeAttribute('draggable');
+  });
+  sidebar.addEventListener('dragstart', e => {
+    const st = e.target.closest('.stop[data-stop]'); if (!st) return;
+    dragId = st.dataset.stop; st.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+    try { e.dataTransfer.setData('text/plain', dragId); } catch (_) { }
+  });
+  sidebar.addEventListener('dragover', e => {
+    if (!dragId) return;
+    const st = e.target.closest('.stop[data-stop]'); if (!st) return;
+    e.preventDefault();
+    sidebar.querySelectorAll('.drag-over').forEach(x => x !== st && x.classList.remove('drag-over'));
+    st.classList.add('drag-over');
+  });
+  sidebar.addEventListener('drop', e => {
+    if (!dragId) return;
+    const st = e.target.closest('.stop[data-stop]'); if (!st) return;
+    e.preventDefault();
+    const from = findStop(dragId), to = findStop(st.dataset.stop);
+    if (from && to && from.v === to.v && from.i !== to.i) {
+      const [m] = from.v.stops.splice(from.i, 1);
+      from.v.stops.splice(to.i, 0, m);
+      save();
+    }
+    dragId = null; renderAll();
+  });
+  sidebar.addEventListener('dragend', () => {
+    dragId = null;
+    sidebar.querySelectorAll('.dragging,.drag-over').forEach(x => x.classList.remove('dragging', 'drag-over'));
+    sidebar.querySelectorAll('.stop[draggable]').forEach(x => x.removeAttribute('draggable'));
+  });
+
+  /* ================= Действия (кнопки) ================= */
+  const actions = {
+    'tab': b => { state.settings.tab = b.dataset.tab; save(); renderSidebar(); },
+    'scale': b => { state.settings.scale = b.dataset.scale; save(); renderChart(true); },
+    'scroll-today': () => scrollToToday(),
+    'voy-add': () => {
+      const ship = state.ships[0];
+      const v = { id: uid(), name: 'Рейс ' + (state.voyages.length + 1), shipId: ship ? ship.id : '', start: toDTInput(sod(Date.now()) + DAY + 8 * 3600000), stops: [] };
+      state.voyages.push(v); state.settings.sel = v.id; state.settings.tab = 'voyage'; save(); renderAll();
+    },
+    'voy-copy': () => {
+      const v = selVoyage(); if (!v) return;
+      const c = computeVoyage(v);
+      const n = JSON.parse(JSON.stringify(v));
+      n.id = uid(); n.name = (v.name || 'Рейс') + ' (копия)'; n.start = toDTInput(c.end);
+      n.stops.forEach(s => { s.id = uid(); });
+      state.voyages.push(n); state.settings.sel = n.id; save(); renderAll();
+    },
+    'voy-del': () => {
+      const v = selVoyage(); if (!v || !confirm(`Удалить рейс «${v.name}»?`)) return;
+      state.voyages = state.voyages.filter(x => x !== v);
+      state.settings.sel = state.voyages[0] ? state.voyages[0].id : null; save(); renderAll();
+    },
+    'stop-add': () => {
+      const v = selVoyage(); if (!v) return;
+      const portId = $('#addPortSel').value; state.settings.lastAddPort = portId;
+      v.stops.push({ id: uid(), portId, op: v.stops.length ? 'unload' : 'load', reserve: null, transit: null });
+      save(); renderAll();
+    },
+    'stop-del': b => { const f = findStop(b.dataset.id); if (!f) return; f.v.stops.splice(f.i, 1); save(); renderAll(); },
+    'stop-up': b => moveStop(b.dataset.id, -1),
+    'stop-down': b => moveStop(b.dataset.id, 1),
+    'transit-reset': b => { const f = findStop(b.dataset.id); if (f) { f.s.transit = null; save(); renderAll(); } },
+    'transit-save': b => {
+      const f = findStop(b.dataset.id); if (!f || f.i === 0) return;
+      const days = parseNum(f.s.transit); if (days == null) return;
+      state.legs.push({ id: uid(), from: f.v.stops[f.i - 1].portId, to: f.s.portId, days });
+      f.s.transit = null; save(); renderAll();
+    },
+    'port-add': () => { state.ports.push({ id: uid(), name: 'Новый порт', load: 1, unload: 1 }); save(); renderAll(); },
+    'port-del': b => {
+      const p = portById(b.dataset.id); if (!p) return;
+      const used = state.voyages.reduce((n, v) => n + v.stops.filter(s => s.portId === p.id).length, 0);
+      const legs = state.legs.filter(l => l.from === p.id || l.to === p.id).length;
+      if (!confirm(`Удалить порт «${p.name}»?` + (legs ? `\nБудут удалены связанные переходы: ${legs}.` : '') + (used ? `\nПорт будет убран из маршрутов рейсов (заходов: ${used}).` : ''))) return;
+      state.ports = state.ports.filter(x => x !== p);
+      state.legs = state.legs.filter(l => l.from !== p.id && l.to !== p.id);
+      state.voyages.forEach(v => { v.stops = v.stops.filter(s => s.portId !== p.id); });
+      save(); renderAll();
+    },
+    'leg-add': () => {
+      const ps = state.ports; let from = ps[0].id, to = ps[1].id;
+      outer: for (const a of ps) for (const c of ps) if (a !== c && !findLeg(a.id, c.id)) { from = a.id; to = c.id; break outer; }
+      state.legs.push({ id: uid(), from, to, days: 1 }); save(); renderAll();
+    },
+    'leg-del': b => { state.legs = state.legs.filter(l => l.id !== b.dataset.id); save(); renderAll(); },
+    'leg-reverse': b => {
+      const l = state.legs.find(x => x.id === b.dataset.id); if (!l) return;
+      state.legs.splice(state.legs.indexOf(l) + 1, 0, { id: uid(), from: l.to, to: l.from, days: l.days }); save(); renderAll();
+    },
+    'ship-add': () => {
+      state.ships.push({ id: uid(), name: 'Новое судно', color: SHIP_PALETTE[state.ships.length % SHIP_PALETTE.length] }); save(); renderAll();
+    },
+    'ship-del': b => {
+      const s = shipById(b.dataset.id); if (!s) return;
+      const n = state.voyages.filter(v => v.shipId === s.id).length;
+      if (!confirm(`Удалить судно «${s.name}»?` + (n ? `\nВместе с ним будут удалены рейсы: ${n}.` : ''))) return;
+      state.ships = state.ships.filter(x => x !== s);
+      state.voyages = state.voyages.filter(v => v.shipId !== s.id);
+      if (!selVoyage()) state.settings.sel = state.voyages[0] ? state.voyages[0].id : null;
+      save(); renderAll();
+    },
+    'add-deadline': () => {
+      state.deadlines.push({ id: uid(), date: toDTInput(sod(Date.now()) + 14 * DAY), label: 'Дедлайн', color: '#c92a2a' });
+      state.settings.tab = 'lines'; save(); renderAll();
+    },
+    'dl-del': b => { state.deadlines = state.deadlines.filter(d => d.id !== b.dataset.id); save(); renderAll(); },
+    'export-json': () => {
+      const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
+      download(blob, `voyages_${fmtD(Date.now()).split('.').reverse().join('-')}.json`);
+    },
+    'import-json': () => $('#fileInput').click(),
+    'export-png': () => exportPng(),
+    'print': () => { $('#printTitle').textContent = 'План рейсов судов — ' + fmtDT(Date.now()); window.print(); },
+    'reset-demo': () => {
+      if (!confirm('Заменить все текущие данные демонстрационными? Текущие данные будут потеряны (сначала можно сделать экспорт JSON).')) return;
+      state = demoData(); save(); renderAll(true);
+    }
+  };
+
+  function moveStop(id, d) {
+    const f = findStop(id); if (!f) return;
+    const j = f.i + d; if (j < 0 || j >= f.v.stops.length) return;
+    [f.v.stops[f.i], f.v.stops[j]] = [f.v.stops[j], f.v.stops[f.i]];
+    save(); renderAll();
+  }
+
+  document.addEventListener('click', e => {
+    const b = e.target.closest('[data-act]'); if (!b || b.disabled) return;
+    const fn = actions[b.dataset.act]; if (fn) fn(b, e);
+  });
+
+  $('#fileInput').addEventListener('change', e => {
+    const f = e.target.files[0]; if (!f) return;
+    const r = new FileReader();
+    r.onload = () => {
+      try {
+        const d = normalize(JSON.parse(r.result));
+        if (!confirm(`Загрузить данные из файла «${f.name}»?\nПортов: ${d.ports.length}, переходов: ${d.legs.length}, судов: ${d.ships.length}, рейсов: ${d.voyages.length}.\nТекущие данные будут заменены.`)) return;
+        state = d; save(); renderAll(true);
+      } catch (err) { alert('Не удалось прочитать файл: ' + err.message); }
+      finally { e.target.value = ''; }
+    };
+    r.readAsText(f, 'utf-8');
+  });
+
+  function download(blob, name) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  }
+
+  /* ================= Диаграмма Ганта (SVG) ================= */
+  let lastSvg = '', lastSize = { w: 0, h: 0 }, tips = [], chartGeom = null;
+  const FONT = 'Segoe UI, Roboto, Arial, sans-serif';
+
+  function textFits(s, w, fs) { return s.length * fs * 0.56 <= w - 6; }
+
+  function renderChart(scrollToday) {
+    const scale = state.settings.scale === 'week' ? 'week' : 'day';
+    document.querySelectorAll('#scaleSeg button').forEach(b => b.classList.toggle('active', b.dataset.scale === scale));
+    const ppd = scale === 'day' ? 56 : 18;
+    const now = Date.now();
+    const comp = new Map();
+    state.voyages.forEach(v => comp.set(v.id, computeVoyage(v)));
+
+    // Диапазон дат
+    let min = now, max = now;
+    comp.forEach(c => { min = Math.min(min, c.start); max = Math.max(max, c.end); });
+    state.deadlines.forEach(d => { const t = parseDT(d.date); if (!isNaN(t)) { min = Math.min(min, t); max = Math.max(max, t); } });
+    min = addDaysCal(sod(min), -1); max = addDaysCal(sod(max), 2);
+    if (scale === 'week') { min = mondayOf(min); max = addDaysCal(mondayOf(max), 7); }
+    if (max - min > 730 * DAY) max = min + 730 * DAY; // ограничение ширины
+    const nDays = Math.round((max - min) / DAY);
+
+    // Строки: по судну, внутри — дорожки для пересекающихся рейсов
+    const rows = state.ships.map(sh => ({ sh, vs: state.voyages.filter(v => v.shipId === sh.id) }));
+    const orphan = state.voyages.filter(v => !shipById(v.shipId));
+    if (orphan.length) rows.push({ sh: { name: 'Судно не выбрано', color: '#868e96' }, vs: orphan });
+    rows.forEach(r => {
+      const items = r.vs.map(v => ({ v, c: comp.get(v.id) })).sort((a, b) => a.c.start - b.c.start);
+      const ends = [];
+      items.forEach(o => {
+        let l = ends.findIndex(e => e <= o.c.start);
+        if (l < 0) { l = ends.length; ends.push(0); }
+        ends[l] = Math.max(o.c.end, o.c.start + 3600000); o.lane = l;
+      });
+      r.items = items; r.lanes = Math.max(1, ends.length);
+    });
+
+    const labelW = 170, titleH = 28, headH = 46, bandH = 22, laneH = 62, rowPad = 4, legendH = 40;
+    const bodyTop = titleH + headH + bandH;
+    let y = bodyTop;
+    rows.forEach(r => { r.y = y; r.h = r.lanes * laneH + rowPad * 2; y += r.h; });
+    if (!rows.length) y += 50;
+    const bodyBottom = y;
+    const W = labelW + nDays * ppd + 16;
+    const H = bodyBottom + legendH;
+    const X = t => labelW + (t - min) / DAY * ppd;
+
+    tips = [];
+    const out = [];
+    const patterns = new Map();
+    const hatch = color => {
+      const id = 'h' + color.replace('#', '');
+      if (!patterns.has(id)) patterns.set(id, `<pattern id="${id}" patternUnits="userSpaceOnUse" width="7" height="7" patternTransform="rotate(45)"><rect width="7" height="7" fill="${tint(color, 0.82)}"/><rect width="3" height="7" fill="${color}"/></pattern>`);
+      return `url(#${id})`;
+    };
+    const T = (x, yy, s, o = {}) => `<text x="${x}" y="${yy}" font-family="${FONT}" font-size="${o.fs || 11}" fill="${o.fill || '#1f2933'}"${o.anchor ? ` text-anchor="${o.anchor}"` : ''}${o.weight ? ` font-weight="${o.weight}"` : ''}>${esc(s)}</text>`;
+
+    out.push(`<rect x="0" y="0" width="${W}" height="${H}" fill="#ffffff"/>`);
+    out.push(T(180, 19, `масштаб: ${scale === 'day' ? 'дни' : 'недели'} · сформировано ${fmtDT(now)}`, { fs: 11, fill: '#6b7684' }));
+
+    // Шапка: месяцы
+    const hy = titleH;
+    out.push(`<rect x="0" y="${hy}" width="${W}" height="${headH + bandH}" fill="#f5f7fa"/>`);
+    let t = min;
+    while (t < max) {
+      const d = new Date(t);
+      const next = Math.min(new Date(d.getFullYear(), d.getMonth() + 1, 1).getTime(), max);
+      const x1 = X(t), x2 = X(next);
+      out.push(`<line x1="${x1}" y1="${hy}" x2="${x1}" y2="${hy + 22}" stroke="#d9dee5"/>`);
+      const lbl = MONTHS[d.getMonth()] + ' ' + d.getFullYear();
+      if (textFits(lbl, x2 - x1, 12)) out.push(T(x1 + 6, hy + 16, lbl, { fs: 12, weight: 600 }));
+      else if (textFits(MONTHS[d.getMonth()].slice(0, 3), x2 - x1, 12)) out.push(T(x1 + 4, hy + 16, MONTHS[d.getMonth()].slice(0, 3), { fs: 12, weight: 600 }));
+      t = next;
+    }
+    out.push(`<line x1="${labelW}" y1="${hy + 22}" x2="${W}" y2="${hy + 22}" stroke="#d9dee5"/>`);
+
+    // Дни / недели, сетка, выходные
+    for (let i = 0; i < nDays; i++) {
+      const dt = addDaysCal(min, i), d = new Date(dt), x = X(dt);
+      const wknd = d.getDay() === 0 || d.getDay() === 6;
+      if (scale === 'day') {
+        if (wknd) out.push(`<rect x="${x}" y="${bodyTop}" width="${ppd}" height="${bodyBottom - bodyTop}" fill="#f4f5f7"/>`);
+        out.push(`<line x1="${x}" y1="${hy + 22}" x2="${x}" y2="${bodyBottom}" stroke="#e9ecef"/>`);
+        out.push(T(x + ppd / 2, hy + 36, String(d.getDate()), { fs: 12, anchor: 'middle', weight: 600, fill: wknd ? '#c92a2a' : '#1f2933' }));
+        out.push(`<text x="${x + ppd / 2}" y="${hy + 45}" font-family="${FONT}" font-size="9" text-anchor="middle" fill="#6b7684">${WD[d.getDay()]}</text>`);
+      } else {
+        if (d.getDay() === 1) {
+          out.push(`<line x1="${x}" y1="${hy + 22}" x2="${x}" y2="${bodyBottom}" stroke="#dde1e6"/>`);
+          out.push(T(x + 4, hy + 36, `${pad(d.getDate())}.${pad(d.getMonth() + 1)}`, { fs: 11, weight: 600 }));
+          out.push(T(x + 4, hy + 45, `нед. ${isoWeek(dt)}`, { fs: 9, fill: '#6b7684' }));
+        } else out.push(`<line x1="${x}" y1="${hy + 40}" x2="${x}" y2="${hy + 46}" stroke="#ccd2d9"/>`);
+      }
+    }
+    out.push(`<line x1="0" y1="${bodyTop}" x2="${W}" y2="${bodyTop}" stroke="#c5ccd4"/>`);
+    out.push(`<line x1="0" y1="${hy + headH}" x2="${W}" y2="${hy + headH}" stroke="#e1e5ea"/>`);
+
+    // Строки судов
+    rows.forEach((r, ri) => {
+      if (ri % 2) out.push(`<rect x="0" y="${r.y}" width="${W}" height="${r.h}" fill="#f8fafc" fill-opacity="0.6"/>`);
+      out.push(`<line x1="0" y1="${r.y + r.h}" x2="${W}" y2="${r.y + r.h}" stroke="#dde1e6"/>`);
+    });
+    // Колонка названий (отдельный слой — закрепляется слева при прокрутке)
+    const lab = [];
+    lab.push(`<rect x="0" y="0" width="${labelW}" height="${bodyBottom}" fill="#ffffff"/>`);
+    lab.push(`<rect x="0" y="${hy}" width="${labelW}" height="${headH + bandH}" fill="#f5f7fa"/>`);
+    lab.push(T(10, 19, 'План рейсов судов', { fs: 14, weight: 600 }));
+    lab.push(T(10, hy + 36, 'Судно', { fs: 12, weight: 600, fill: '#6b7684' }));
+    lab.push(`<line x1="0" y1="${bodyTop}" x2="${labelW}" y2="${bodyTop}" stroke="#c5ccd4"/>`);
+    rows.forEach((r, ri) => {
+      if (ri % 2) lab.push(`<rect x="0" y="${r.y}" width="${labelW}" height="${r.h}" fill="#f8fafc"/>`);
+      lab.push(`<rect x="0" y="${r.y}" width="5" height="${r.h}" fill="${r.sh.color}"/>`);
+      let name = r.sh.name || '';
+      while (name.length > 3 && !textFits(name, labelW - 18, 13)) name = name.slice(0, -2) + '…';
+      lab.push(T(14, r.y + 24, name, { fs: 13, weight: 600 }));
+      lab.push(T(14, r.y + 40, r.vs.length ? `рейсов: ${r.vs.length}` : 'нет рейсов', { fs: 10, fill: '#6b7684' }));
+      lab.push(`<line x1="0" y1="${r.y + r.h}" x2="${labelW}" y2="${r.y + r.h}" stroke="#dde1e6"/>`);
+    });
+    lab.push(`<line x1="${labelW - 0.5}" y1="${titleH}" x2="${labelW - 0.5}" y2="${bodyBottom}" stroke="#c5ccd4"/>`);
+    if (!rows.length) out.push(T(labelW + 20, bodyTop + 30, 'Добавьте суда и рейсы в панели слева', { fs: 13, fill: '#6b7684' }));
+
+    // Блоки рейсов
+    const selId = state.settings.sel;
+    rows.forEach(r => {
+      r.items.forEach(({ v, c, lane }) => {
+        const ship = shipById(v.shipId) || r.sh;
+        const sc = ship.color || '#868e96';
+        const ly = r.y + rowPad + lane * laneH;
+        const by = ly + 6, bh = 32;
+        const isSel = v.id === selId;
+        let callRight = -Infinity;
+        const voyTitle = `${v.name || 'Рейс'} · ${ship.name}`;
+        // скобка рейса
+        if (c.segs.length) {
+          const x1 = X(c.start), x2 = Math.max(X(c.end), x1 + 2);
+          tips.push({ title: v.name || 'Рейс', lines: [`Судно: ${ship.name}`, `Начало: ${fmtDT(c.start)}`, `Окончание: ${fmtDT(c.end)}`, `Длительность: ${fmtDays(c.days)} (${fmtHours(c.days)})`], vid: v.id });
+          out.push(`<g class="blk" data-tip="${tips.length - 1}"><rect x="${x1}" y="${by + bh + 5}" width="${x2 - x1}" height="${isSel ? 5 : 3}" rx="1.5" fill="${sc}"/>` +
+            `<rect x="${x1}" y="${by + bh + 1}" width="${Math.max(x2 - x1, 1)}" height="22" fill="transparent"/>` +
+            T(x1 + 1, by + bh + 21, `${v.name || 'Рейс'} · ${fmtDays(c.days)}`, { fs: 10, weight: isSel ? 700 : 400, fill: '#3b4652' }) + `</g>`);
+        }
+        c.segs.forEach(s => {
+          const x1 = X(s.start), w = Math.max(X(s.end) - x1, 0);
+          let g = '';
+          const tipLines = s.type === 'call'
+            ? [`Время захода: ${fmtDT(s.start)}`]
+            : [`Начало: ${fmtDT(s.start)}`, `Окончание: ${fmtDT(s.end)}`, `Длительность: ${fmtDays(s.days)} (${fmtHours(s.days)})`];
+          if (s.type === 'transit' && s.source === 'manual') tipLines.push('Время перехода введено вручную');
+          tips.push({ title: `${STAGE[s.type]} — ${s.place}`, lines: tipLines.concat([voyTitle]), vid: v.id });
+          const tipIdx = tips.length - 1;
+          if (s.type === 'transit') {
+            const ty = by + 8, th = 16;
+            g += `<rect x="${x1}" y="${ty}" width="${Math.max(w, 1)}" height="${th}" rx="3" fill="${sc}"/>`;
+            const cand = [`→ ${s.toName} · ${fmtDays(s.days)}`, `→ ${s.toName}`, fmtDays(s.days), fmtNum(s.days)];
+            const lbl = cand.find(x => textFits(x, w - 8, 10));
+            if (lbl) g += T(x1 + 4, ty + 12, lbl, { fs: 10, fill: '#ffffff', weight: 600 });
+          } else if (s.type === 'load' || s.type === 'unload') {
+            const col = COLORS[s.type];
+            g += `<rect x="${x1}" y="${by}" width="${Math.max(w, 1)}" height="${bh}" rx="3" fill="${col}"/>`;
+            const opT = STAGE[s.type];
+            if (textFits(s.place, w, 11) && textFits(`${opT} · ${fmtDays(s.days)}`, w, 10)) {
+              g += T(x1 + 4, by + 14, s.place, { fs: 11, fill: '#fff', weight: 700 });
+              g += T(x1 + 4, by + 27, `${opT} · ${fmtDays(s.days)}`, { fs: 10, fill: '#fff' });
+            } else if (textFits(s.place, w, 11) && textFits(fmtDays(s.days), w, 10)) {
+              g += T(x1 + 4, by + 14, s.place, { fs: 11, fill: '#fff', weight: 700 });
+              g += T(x1 + 4, by + 27, (s.type === 'load' ? 'погр. ' : 'выгр. ') + fmtNum(s.days), { fs: 10, fill: '#fff' });
+            } else {
+              const cand = [s.place, (s.type === 'load' ? 'П ' : 'В ') + fmtNum(s.days), s.type === 'load' ? 'П' : 'В'];
+              const lbl = cand.find(x => textFits(x, w, 10));
+              if (lbl) g += T(x1 + 3, by + 20, lbl, { fs: 10, fill: '#fff', weight: 600 });
+            }
+          } else if (s.type === 'reserve') {
+            const col = COLORS[s.colorOf] || sc;
+            g += `<rect x="${x1}" y="${by}" width="${Math.max(w, 1)}" height="${bh}" rx="3" fill="${hatch(col)}" stroke="${col}" stroke-width="1"/>`;
+            const cand = [`Запас ${fmtDays(s.days)}`, `з. ${fmtNum(s.days)}`];
+            const lbl = cand.find(x => textFits(x, w, 10));
+            if (lbl) g += `<rect x="${x1 + 2}" y="${by + 10}" width="${lbl.length * 5.8 + 6}" height="13" rx="2" fill="#ffffff" fill-opacity="0.85"/>` + T(x1 + 5, by + 20, lbl, { fs: 10, weight: 600, fill: '#1f2933' });
+          } else if (s.type === 'call') {
+            const cy = by + bh / 2;
+            g += `<path d="M${x1} ${cy - 9} l8 9 l-8 9 l-8 -9 z" fill="#ffffff" stroke="${sc}" stroke-width="2.5"/>`;
+            g += `<rect x="${x1 - 10}" y="${by}" width="20" height="${bh}" fill="transparent"/>`;
+            const cw = s.place.length * 5.2;
+            if (x1 - cw / 2 > callRight + 4) { g += T(x1, by - 1, s.place, { fs: 9, anchor: 'middle', fill: '#3b4652', weight: 600 }); callRight = x1 + cw / 2; }
+          }
+          out.push(`<g class="blk" data-tip="${tipIdx}">${g}</g>`);
+        });
+        if (isSel && c.segs.length) {
+          const x1 = X(c.start) - 3, x2 = X(c.end) + 3;
+          out.push(`<rect x="${x1}" y="${by - 4}" width="${Math.max(x2 - x1, 6)}" height="${bh + 8}" rx="5" fill="none" stroke="${sc}" stroke-width="1.5" stroke-dasharray="4 3"/>`);
+        }
+      });
+    });
+
+    // Линия «сегодня» и дедлайны
+    const markers = [];
+    if (now >= min && now <= max) markers.push({ t: now, label: 'Сегодня', color: '#e03131', dash: '', w: 2 });
+    state.deadlines.forEach(d => {
+      const tt = parseDT(d.date);
+      if (!isNaN(tt) && tt >= min && tt <= max) markers.push({ t: tt, label: d.label || 'Дедлайн', color: d.color || '#c92a2a', dash: '7 4', w: 2, tip: `${d.label || 'Дедлайн'}: ${fmtDT(tt)}` });
+    });
+    markers.sort((a, b) => a.t - b.t);
+    let lastRight = -Infinity, bandRow = 0;
+    markers.forEach(m => {
+      const x = X(m.t);
+      out.push(`<line x1="${x}" y1="${titleH + headH}" x2="${x}" y2="${bodyBottom}" stroke="${m.color}" stroke-width="${m.w}"${m.dash ? ` stroke-dasharray="${m.dash}"` : ''}/>`);
+      const lw = m.label.length * 6 + 10;
+      const lx = Math.min(Math.max(x - lw / 2, labelW + 1), W - lw - 1);
+      bandRow = lx < lastRight + 2 ? (bandRow + 1) % 2 : 0; // подписи рядом — вторая ниже
+      const ly = bandRow ? bodyTop + 2 : titleH + headH + 3;
+      if (m.tip) tips.push({ title: m.label, lines: [fmtDT(m.t)] });
+      out.push(`<g${m.tip ? ` class="blk" data-tip="${tips.length - 1}"` : ''}><rect x="${lx}" y="${ly}" width="${lw}" height="16" rx="3" fill="${m.color}" fill-opacity="${bandRow ? 0.75 : 1}"/>` + T(lx + lw / 2, ly + 12, m.label, { fs: 10.5, fill: '#fff', anchor: 'middle', weight: 600 }) + `</g>`);
+      if (!bandRow) lastRight = lx + lw;
+    });
+
+    out.push(...lab);
+
+    // Легенда
+    const ly = bodyBottom + 12;
+    let lx = 10;
+    const leg = (sw, label) => { out.push(sw(lx, ly)); out.push(T(lx + 26, ly + 11, label, { fs: 11 })); lx += 26 + label.length * 6.2 + 18; };
+    const legShip = (rows[0] && rows[0].sh.color) || '#868e96';
+    leg((x, y0) => `<rect x="${x}" y="${y0}" width="20" height="14" rx="2" fill="${COLORS.load}"/>`, 'Погрузка');
+    leg((x, y0) => `<rect x="${x}" y="${y0}" width="20" height="14" rx="2" fill="${COLORS.unload}"/>`, 'Выгрузка');
+    leg((x, y0) => `<rect x="${x}" y="${y0 + 3}" width="20" height="8" rx="2" fill="${legShip}"/>`, 'Переход (цвет судна)');
+    leg((x, y0) => `<rect x="${x}" y="${y0}" width="20" height="14" rx="2" fill="${hatch(COLORS.load)}" stroke="${COLORS.load}"/>`, 'Запас (штриховка цвета операции)');
+    leg((x, y0) => `<path d="M${x + 10} ${y0 - 1} l8 8 l-8 8 l-8 -8 z" fill="#fff" stroke="${legShip}" stroke-width="2"/>`, 'Заход без операций');
+    leg((x, y0) => `<line x1="${x}" y1="${y0 + 7}" x2="${x + 20}" y2="${y0 + 7}" stroke="#e03131" stroke-width="2"/>`, 'Сегодня');
+    leg((x, y0) => `<line x1="${x}" y1="${y0 + 7}" x2="${x + 20}" y2="${y0 + 7}" stroke="#c92a2a" stroke-width="2" stroke-dasharray="5 3"/>`, 'Дедлайн');
+    const Wf = Math.max(W, lx + 10);
+
+    lastSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${Wf}" height="${H}" viewBox="0 0 ${Wf} ${H}"><defs>${[...patterns.values()].join('')}</defs>${out.join('')}</svg>`;
+    lastSize = { w: Wf, h: H };
+    chartGeom = { X, min, max, labelW };
+    const wrap = $('#chartWrap');
+    const keep = wrap.scrollLeft;
+    $('#chart').style.width = Wf + 'px';
+    $('#chart').innerHTML = `<svg class="sticky-labels" xmlns="http://www.w3.org/2000/svg" width="${labelW}" height="${bodyBottom}" style="margin-bottom:-${bodyBottom}px">${lab.join('')}</svg>` + lastSvg;
+    wrap.scrollLeft = keep;
+    if (scrollToday) scrollToToday();
+  }
+
+  function scrollToToday() {
+    if (!chartGeom) return;
+    $('#chartWrap').scrollLeft = Math.max(0, chartGeom.X(Date.now()) - chartGeom.labelW - 120);
+  }
+
+  // Подсказки при наведении
+  const tipEl = $('#tooltip');
+  $('#chart').addEventListener('mousemove', e => {
+    const g = e.target.closest('[data-tip]');
+    if (!g) { tipEl.style.display = 'none'; return; }
+    const tp = tips[+g.dataset.tip]; if (!tp) return;
+    tipEl.innerHTML = `<b>${esc(tp.title)}</b><br>${tp.lines.map(esc).join('<br>')}`;
+    tipEl.style.display = 'block';
+    const r = tipEl.getBoundingClientRect();
+    let x = e.clientX + 14, y = e.clientY + 14;
+    if (x + r.width > innerWidth - 8) x = e.clientX - r.width - 14;
+    if (y + r.height > innerHeight - 8) y = e.clientY - r.height - 14;
+    tipEl.style.left = x + 'px'; tipEl.style.top = y + 'px';
+  });
+  $('#chart').addEventListener('mouseleave', () => { tipEl.style.display = 'none'; });
+  $('#chart').addEventListener('click', e => {
+    const g = e.target.closest('[data-tip]'); if (!g) return;
+    const tp = tips[+g.dataset.tip];
+    if (tp && tp.vid) { state.settings.sel = tp.vid; state.settings.tab = 'voyage'; save(); renderAll(); }
+  });
+
+  function exportPng() {
+    if (!lastSvg) return;
+    const img = new Image();
+    img.onload = () => {
+      const k = Math.min(2, 16000 / lastSize.w, 16000 / lastSize.h);
+      const cv = document.createElement('canvas');
+      cv.width = Math.round(lastSize.w * k); cv.height = Math.round(lastSize.h * k);
+      const ctx = cv.getContext('2d');
+      ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cv.width, cv.height);
+      ctx.scale(k, k); ctx.drawImage(img, 0, 0);
+      cv.toBlob(b => download(b, `voyages_gantt_${fmtD(Date.now()).split('.').reverse().join('-')}.png`), 'image/png');
+    };
+    img.onerror = () => alert('Не удалось сформировать PNG');
+    img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(lastSvg);
+  }
+
+  /* ================= Таблица рейса ================= */
+  function renderTable() {
+    const sec = $('#tableSection');
+    const v = selVoyage();
+    if (!v) { sec.innerHTML = '<p class="hint">Выберите или создайте рейс, чтобы увидеть таблицу этапов.</p>'; return; }
+    const c = computeVoyage(v);
+    const ship = shipById(v.shipId);
+    const sc = ship ? ship.color : '#868e96';
+    const sw = s => {
+      if (s.type === 'transit') return `<span class="sw" style="background:${sc};height:7px;vertical-align:2px"></span>`;
+      if (s.type === 'load' || s.type === 'unload') return `<span class="sw" style="background:${COLORS[s.type]}"></span>`;
+      if (s.type === 'reserve') { const col = COLORS[s.colorOf] || sc; return `<span class="sw" style="background:repeating-linear-gradient(45deg,${col} 0 2px,${tint(col, .8)} 2px 5px);border:1px solid ${col}"></span>`; }
+      return `<span class="sw" style="background:#fff;border:2px solid ${sc};transform:rotate(45deg);width:10px;height:10px;margin-left:2px"></span>`;
+    };
+    const rows = c.segs.map((s, i) => `<tr>
+      <td>${i + 1}</td>
+      <td>${sw(s)}${STAGE[s.type]}${s.type === 'transit' && s.source === 'manual' ? ' <span class="muted">(вручную)</span>' : ''}</td>
+      <td>${esc(s.place)}</td>
+      <td>${fmtDT(s.start)}</td>
+      <td>${fmtDT(s.end)}</td>
+      <td class="r">${fmtNum(s.days)}</td>
+      <td class="r">${fmtHours(s.days)}</td></tr>`).join('');
+    const w = c.warnings.concat(deadlineWarnings(c));
+    sec.innerHTML = `<h2>${esc(v.name || 'Рейс')}</h2>
+      <div class="muted" style="margin-bottom:8px">Судно: <b>${esc(ship ? ship.name : '—')}</b> · начало ${fmtDT(c.start)} · окончание ${fmtDT(c.end)}</div>
+      ${w.length ? `<div class="warnbox" style="margin-bottom:8px">⚠ ${w.map(esc).join('<br>⚠ ')}</div>` : ''}
+      <div style="overflow-x:auto">
+      <table class="grid">
+        <thead><tr><th>№</th><th>Этап</th><th>Порт / участок</th><th>Начало</th><th>Окончание</th><th class="r">Длительность, сут.</th><th class="r">Часы</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="7" class="muted">Маршрут пуст</td></tr>'}</tbody>
+        <tfoot>
+          <tr><td></td><td colspan="2">Итого по рейсу</td><td>${fmtDT(c.start)}</td><td>${fmtDT(c.end)}</td><td class="r">${fmtNum(c.days)}</td><td class="r">${fmtHours(c.days)}</td></tr>
+          <tr><td></td><td colspan="6" class="muted" style="font-weight:400">в т.ч. в пути ${fmtDays(c.totals.transit)} · грузовые операции ${fmtDays(c.totals.ops)} · запас ${fmtDays(c.totals.reserve)}</td></tr>
+        </tfoot>
+      </table></div>`;
+  }
+
+  function renderAll(scrollToday) {
+    renderSidebar();
+    renderChart(scrollToday);
+    renderTable();
+  }
+
+  // Синхронизация между вкладками браузера
+  window.addEventListener('storage', e => {
+    if (e.key !== STORE_KEY || !e.newValue) return;
+    try { state = normalize(JSON.parse(e.newValue)); renderAll(); } catch (_) { }
+  });
+  window.addEventListener('beforeprint', () => { $('#printTitle').textContent = 'План рейсов судов — ' + fmtDT(Date.now()); });
+
+  save();
+  renderAll(true);
+})();
+</script>
+</body>
+</html>
