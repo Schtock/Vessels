@@ -116,6 +116,8 @@
   .chip.res { background: repeating-linear-gradient(45deg, #fff 0 4px, #eef1f5 4px 8px); border: 1px solid #d5dbe2; }
   .chip.bad { background: #ffe3e3; color: var(--danger); }
   .chip.good { background: #e6f4ea; color: var(--ok); }
+  .res-in { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; color: var(--muted); margin-right: 2px; }
+  input.num-in.mini { width: 42px; padding: 1px 4px; font-size: 12px; }
   .chip.time { background: none; color: var(--muted); padding: 0 2px; }
   .leg-chip { margin: 3px 0 3px 38px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
   .leg-chip .chip { background: #fff; border: 1px dashed #c3ccd6; }
@@ -329,22 +331,22 @@
   const emptyCons = () => ({ sea: { hfo: 0, mgo: 0 }, port: { hfo: 0, mgo: 0 }, cranes: { hfo: 0, mgo: 0 } });
 
   function demoData() {
-    const P = (name, load, unload, reserve, shipCranes) => ({ id: uid(), name, load, unload, reserve, shipCranes });
-    const arh = P('Архангельск', 2, 1.5, 0.5, false), mur = P('Мурманск', 1.5, 1, 0, false),
-      sab = P('Сабетта', 1, 1.5, 1, true), dud = P('Дудинка', 2, 2.5, 1, false), pev = P('Певек', 2, 3, 1, true);
+    const P = (name, load, unload, shipCranes) => ({ id: uid(), name, load, unload, shipCranes });
+    const arh = P('Архангельск', 2, 1.5, false), mur = P('Мурманск', 1.5, 1, false),
+      sab = P('Сабетта', 1, 1.5, true), dud = P('Дудинка', 2, 2.5, false), pev = P('Певек', 2, 3, true);
     const L = (a, b, days) => ({ id: uid(), from: a.id, to: b.id, days });
     const s1 = { id: uid(), name: 'Северное сияние', color: '#e8590c', hire: 18000,
       cons: { sea: { hfo: 22, mgo: 2 }, port: { hfo: 2, mgo: 2.5 }, cranes: { hfo: 4, mgo: 3 } } };
     const s2 = { id: uid(), name: 'Полярная звезда', color: '#7048e8', hire: 14500,
       cons: { sea: { hfo: 18, mgo: 1.5 }, port: { hfo: 1.5, mgo: 2 }, cranes: { hfo: 3, mgo: 2.5 } } };
     const start = sod(Date.now()) - 2 * DAY + 8 * 3600000;
-    const St = (p, op) => ({ id: uid(), portId: p.id, op });
+    const St = (p, op, reserve) => ({ id: uid(), portId: p.id, op, reserve: reserve || null });
     const voyage = {
       id: uid(), name: 'Рейс 1 — Северный морской путь', shipId: s1.id, start: toDTInput(start),
-      stops: [St(arh, 'load'), St(mur, 'call'), St(dud, 'unload'), St(pev, 'both'), St(mur, 'unload')]
+      stops: [St(arh, 'load', 0.5), St(mur, 'call'), St(dud, 'unload', 1), St(pev, 'both', 1), St(mur, 'unload')]
     };
     return {
-      version: 2,
+      version: 3,
       ports: [arh, mur, sab, dud, pev],
       legs: [L(arh, mur, 1.5), L(mur, sab, 3), L(sab, dud, 1.5), L(mur, dud, 4), L(dud, pev, 5), L(pev, mur, 8),
         L(sab, pev, 5.5), L(arh, dud, 4.5), L(dud, arh, 5)],
@@ -373,12 +375,14 @@
     });
     d.deadlines.forEach(x => { x.id = x.id || uid(); x.color = x.color || '#c92a2a'; x.portId = x.portId || ''; });
     const legKnown = (a, b) => d.legs.some(l => (l.from === a && l.to === b) || (l.from === b && l.to === a));
-    const oldReserve = {};
+    // Версия 2 хранила запас в справочнике портов — переносим его в рейсы (только заходы с операциями)
+    const portReserve = {};
+    d.ports.forEach(p => { if ('reserve' in p) { portReserve[p.id] = num0(p.reserve); delete p.reserve; } });
     d.voyages.forEach(v => {
       v.id = v.id || uid(); v.stops = Array.isArray(v.stops) ? v.stops : [];
       v.stops.forEach((s, i) => {
         s.id = s.id || uid(); s.op = OPS[s.op] ? s.op : 'call';
-        if ('reserve' in s) { oldReserve[s.portId] = Math.max(oldReserve[s.portId] || 0, num0(s.reserve)); delete s.reserve; }
+        if (!('reserve' in s)) s.reserve = s.op !== 'call' && portReserve[s.portId] ? portReserve[s.portId] : null;
         if ('transit' in s) {
           const t = parseNum(s.transit);
           if (t != null && i > 0 && !legKnown(v.stops[i - 1].portId, s.portId)) d.legs.push({ id: uid(), from: v.stops[i - 1].portId, to: s.portId, days: t });
@@ -386,9 +390,8 @@
         }
       });
     });
-    d.ports.forEach(p => { if (p.reserve == null) p.reserve = oldReserve[p.id] || 0; });
     if (!d.voyages.some(v => v.id === d.settings.sel)) d.settings.sel = d.voyages[0] ? d.voyages[0].id : null;
-    d.version = 2;
+    d.version = 3;
     return d;
   }
 
@@ -534,7 +537,7 @@
       }
       const arrive = t;
       const ops = s.op === 'both' ? ['unload', 'load'] : s.op === 'call' ? [] : [s.op];
-      const res = port ? num0(port.reserve) : 0;
+      const res = num0(s.reserve);
       if (res > 0) {
         segs.push({ type: 'reserve', colorOf: ops[0] || 'call', start: t, end: t + res * DAY, days: res, place: pn, stopId: s.id });
         t += res * DAY; totals.reserve += res;
@@ -628,14 +631,14 @@
       <label>Начало</label><input type="datetime-local" data-k="voy:${v.id}:start" value="${esc(v.start)}">
     </div>
     <h3>Маршрут</h3>
-    <p class="hint" style="margin-top:-4px">Нормативы, запас и время переходов берутся из справочников «Порты» и «Переходы».</p>
+    <p class="hint" style="margin-top:-4px">Запас (очередь, непогода) задаётся для каждого порта рейса. Нормативы и время переходов берутся из справочников «Порты» и «Переходы».</p>
     <div class="stops">`;
     v.stops.forEach((s, i) => {
       const st = c.stopTimes[i];
       if (i > 0) h += legChip(v.stops[i - 1], s, st.transit);
       const port = portById(s.portId);
       const chips = [];
-      if (st.reserve > 0) chips.push(`<span class="chip res" title="Запас (очередь, непогода) из справочника портов">запас ${fmtNum(st.reserve)} сут.</span>`);
+      chips.push(`<label class="res-in" title="Запас времени в этом порту (очередь, непогода), сут.">запас <input type="text" inputmode="decimal" class="num-in mini" data-k="stop:${s.id}:reserve" value="${fmtIn(s.reserve)}" placeholder="0"> сут.</label>`);
       if ('unload' in st.opDays) chips.push(`<span class="chip unload">выгр. ${fmtNum(st.opDays.unload)} сут.</span>`);
       if ('load' in st.opDays) chips.push(`<span class="chip load">погр. ${fmtNum(st.opDays.load)} сут.</span>`);
       if (port && port.shipCranes && s.op !== 'call') chips.push(`<span class="chip" title="Грузовые операции судовыми кранами">судовые краны</span>`);
@@ -688,13 +691,12 @@
   }
 
   function viewPorts() {
-    return `<p class="hint">Значения в сутках, можно дробные (1,5). <b>Запас</b> — резерв на очередь и непогоду, добавляется при каждом заходе в порт. <b>Суд. краны</b> — грузовые операции выполняются судовыми кранами (влияет на расход топлива).</p>
-    <div class="scroll-x"><table class="grid"><thead><tr><th>Порт</th><th class="r">Погр.</th><th class="r">Выгр.</th><th class="r">Запас</th><th class="c" title="Грузовые операции судовыми кранами">Суд. краны</th><th></th></tr></thead><tbody>
+    return `<p class="hint">Значения в сутках, можно дробные (1,5). Запас на очередь и непогоду задаётся в рейсе, отдельно для каждого порта. <b>Суд. краны</b> — грузовые операции выполняются судовыми кранами (влияет на расход топлива).</p>
+    <div class="scroll-x"><table class="grid"><thead><tr><th>Порт</th><th class="r">Погр.</th><th class="r">Выгр.</th><th class="c" title="Грузовые операции судовыми кранами">Суд. краны</th><th></th></tr></thead><tbody>
     ${state.ports.map(p => `<tr data-row="${p.id}">
       <td><input type="text" data-k="port:${p.id}:name" value="${esc(p.name)}"></td>
       <td class="r"><input type="text" inputmode="decimal" class="num-in" data-k="port:${p.id}:load" value="${fmtIn(p.load)}"></td>
       <td class="r"><input type="text" inputmode="decimal" class="num-in" data-k="port:${p.id}:unload" value="${fmtIn(p.unload)}"></td>
-      <td class="r"><input type="text" inputmode="decimal" class="num-in" data-k="port:${p.id}:reserve" value="${fmtIn(p.reserve)}" placeholder="0"></td>
       <td class="c"><input type="checkbox" data-k="port:${p.id}:shipCranes" ${p.shipCranes ? 'checked' : ''}></td>
       <td><button class="icon danger" data-act="port-del" data-id="${p.id}" title="Удалить">✕</button></td></tr>`).join('')}
     </tbody></table></div>
@@ -942,7 +944,7 @@
     'stop-add': () => {
       const v = selVoyage(); if (!v) return;
       const portId = $('#addPortSel').value; state.settings.lastAddPort = portId;
-      v.stops.push({ id: uid(), portId, op: v.stops.length ? 'unload' : 'load' });
+      v.stops.push({ id: uid(), portId, op: v.stops.length ? 'unload' : 'load', reserve: null });
       save(); renderAll();
     },
     'stop-del': b => { const f = findStop(b.dataset.id); if (!f) return; f.v.stops.splice(f.i, 1); save(); renderAll(); },
@@ -952,7 +954,7 @@
       focusRow(l.id, `leg:${l.id}:days`);
     },
     'port-add': () => {
-      const p = { id: uid(), name: 'Новый порт', load: 1, unload: 1, reserve: 0, shipCranes: false };
+      const p = { id: uid(), name: 'Новый порт', load: 1, unload: 1, shipCranes: false };
       state.ports.push(p); save(); renderAll(); focusRow(p.id, `port:${p.id}:name`);
     },
     'port-del': b => {
