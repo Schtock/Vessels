@@ -118,6 +118,21 @@
   .chip.good { background: #e6f4ea; color: var(--ok); }
   .res-in { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; color: var(--muted); margin-right: 2px; }
   input.num-in.mini { width: 42px; padding: 1px 4px; font-size: 12px; }
+  .chip.late { background: #ffe3e3; color: var(--danger); }
+  .chip.early { background: #e6f4ea; color: var(--ok); }
+  .chip.ontime { background: #eef1f5; color: #3b4652; }
+  .fact-stop { border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px 4px; margin-bottom: 8px; background: #fbfcfd; }
+  .fact-stop h4 { margin: 0 0 4px; font-size: 13px; }
+  .ev { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 6px; align-items: center; padding: 4px 0; border-top: 1px dashed #e3e7ec; }
+  .ev:first-of-type { border-top: none; }
+  .ev-name { font-size: 12px; }
+  .ev-name .muted { font-size: 11px; }
+  .ev-in { display: flex; gap: 4px; align-items: center; grid-column: 1 / -1; }
+  .ev-in input[type=datetime-local] { flex: 1; font-size: 12px; padding: 2px 4px; }
+  .ev-in button { font-size: 11px; padding: 1px 6px; }
+  .ev.bad input { border-color: var(--danger); }
+  .fact-sum { padding: 10px; background: var(--accent-soft); border-radius: 8px; line-height: 1.6; margin-bottom: 10px; font-size: 13px; }
+  td.fc { color: var(--muted); font-style: italic; }
   .chip.time { background: none; color: var(--muted); padding: 0 2px; }
   .leg-chip { margin: 3px 0 3px 38px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
   .leg-chip .chip { background: #fff; border: 1px dashed #c3ccd6; }
@@ -345,6 +360,8 @@
       id: uid(), name: 'Рейс 1 — Северный морской путь', shipId: s1.id, start: toDTInput(start),
       stops: [St(arh, 'load', 0.5), St(mur, 'call'), St(dud, 'unload', 1), St(pev, 'both', 1), St(mur, 'unload')]
     };
+    // Демонстрационный факт: пришли на 2 ч позже, погрузку начали на 6 ч позже плана — погрузка идёт
+    voyage.fact = { [voyage.stops[0].id]: { arr: toDTInput(start + 2 * 3600000), loadStart: toDTInput(start + 18 * 3600000) } };
     return {
       version: 3,
       ports: [arh, mur, sab, dud, pev],
@@ -380,6 +397,7 @@
     d.ports.forEach(p => { if ('reserve' in p) { portReserve[p.id] = num0(p.reserve); delete p.reserve; } });
     d.voyages.forEach(v => {
       v.id = v.id || uid(); v.stops = Array.isArray(v.stops) ? v.stops : [];
+      v.fact = v.fact && typeof v.fact === 'object' ? v.fact : {};
       v.stops.forEach((s, i) => {
         s.id = s.id || uid(); s.op = OPS[s.op] ? s.op : 'call';
         if (!('reserve' in s)) s.reserve = s.op !== 'call' && portReserve[s.portId] ? portReserve[s.portId] : null;
@@ -543,18 +561,100 @@
         t += res * DAY; totals.reserve += res;
       }
       if (s.op === 'call') segs.push({ type: 'call', start: t, end: t, days: 0, place: pn, stopId: s.id });
-      const opDays = {};
+      const opDays = {}, opTimes = {};
       ops.forEach(op => {
         const d = port ? num0(op === 'load' ? port.load : port.unload) : 0;
         if (port && d === 0) warnings.push(`У порта ${pn} не задан норматив: ${op === 'load' ? 'погрузка' : 'выгрузка'}.`);
         segs.push({ type: op, start: t, end: t + d * DAY, days: d, place: pn, stopId: s.id, cranes: !!(port && port.shipCranes) });
+        opTimes[op] = { start: t, end: t + d * DAY };
         t += d * DAY; totals.ops += d; opDays[op] = d;
       });
-      stopTimes.push({ arrive, depart: t, reserve: res, opDays, transit, stopId: s.id, portId: s.portId });
+      stopTimes.push({ arrive, depart: t, reserve: res, opDays, opTimes, transit, stopId: s.id, portId: s.portId });
     });
     const c = { segs, start: t0, end: t, days: (t - t0) / DAY, warnings, totals, stopTimes };
     c.checks = deadlineChecks(v, c);
+    c.fx = voyageFact(v, c);
     return c;
+  }
+
+  /* ================= Факт: контрольные точки ================= */
+  const EV_LABEL = { arr: 'Приход', unloadStart: 'Начало выгрузки', unloadEnd: 'Окончание выгрузки', loadStart: 'Начало погрузки', loadEnd: 'Окончание погрузки', dep: 'Отход' };
+  function evLabel(e, n) {
+    if (e.key === 'arr' && e.stopIdx === 0) return 'Приход (начало рейса)';
+    if (e.key === 'dep' && e.stopIdx === n - 1) return 'Отход (окончание рейса)';
+    return EV_LABEL[e.key];
+  }
+  // Контрольные точки рейса: плановое время, факт (если введён) и прогноз для ещё не наступивших событий
+  function voyageFact(v, c) {
+    const f = v.fact || {};
+    const ev = [];
+    v.stops.forEach((s, i) => {
+      const st = c.stopTimes[i];
+      const add = (key, plan) => {
+        const raw = (f[s.id] && f[s.id][key]) || '';
+        const fact = parseDT(raw);
+        ev.push({ stopId: s.id, stopIdx: i, portId: s.portId, op: s.op, key, plan, fact: isNaN(fact) ? null : fact, raw });
+      };
+      add('arr', st.arrive);
+      (s.op === 'both' ? ['unload', 'load'] : s.op === 'call' ? [] : [s.op]).forEach(op => {
+        add(op + 'Start', st.opTimes[op].start); add(op + 'End', st.opTimes[op].end);
+      });
+      add('dep', st.depart);
+    });
+    let lastIdx = -1;
+    ev.forEach((e, i) => { if (e.fact != null) lastIdx = i; });
+    let prev = null;
+    ev.forEach(e => { if (e.fact != null) { if (prev != null && e.fact < prev) e.bad = true; prev = e.fact; } });
+    let delay = null;
+    const now = Date.now();
+    if (lastIdx >= 0) {
+      delay = ev[lastIdx].fact - ev[lastIdx].plan;
+      const next = ev[lastIdx + 1];
+      // следующее событие ещё не отмечено, а по плану со сдвигом уже должно было наступить — отставание растёт
+      if (next && now > next.plan + delay) delay = now - next.plan;
+      ev.forEach((e, i) => { if (i > lastIdx) e.forecast = e.plan + delay; });
+    }
+    const end = ev[ev.length - 1];
+    const out = { ev, lastIdx, delay, hasFact: lastIdx >= 0, done: !!(end && end.fact != null),
+      end: end ? (end.fact != null ? end.fact : end.forecast) : null, checks: [] };
+    // Проверка линий-дедлайнов по факту и прогнозу
+    if (out.hasFact) state.deadlines.forEach(d => {
+      const dt = parseDT(d.date); if (isNaN(dt)) return;
+      const label = d.label || 'Дедлайн';
+      const chk = (t, isFact, what) => {
+        const slack = (dt - t) / DAY;
+        out.checks.push({ ok: slack >= 0, text: `${isFact ? 'Факт' : 'Прогноз'}: ${what} ${fmtDT(t)} — ${slack >= 0 ? `до линии «${label}» остаётся ${fmtDays(slack)}` : `позже линии «${label}» (${fmtDT(dt)}) на ${fmtDays(-slack)}`}` });
+      };
+      if (d.portId) ev.filter(e => e.key === 'dep' && e.portId === d.portId).forEach(e => {
+        const t = e.fact != null ? e.fact : e.forecast;
+        if (t != null) chk(t, e.fact != null, `отход из п. ${portName(d.portId)}`);
+      });
+      else if (out.end != null && c.start < dt) chk(out.end, out.done, 'окончание рейса');
+    });
+    return out;
+  }
+  function fmtDev(ms) {
+    const d = ms / DAY, a = Math.abs(d);
+    const txt = a < 1 ? `${Math.round(a * 24 * 10) / 10} ч`.replace('.', ',') : fmtDays(a);
+    return (d > 0 ? '+' : d < 0 ? '−' : '±') + txt;
+  }
+  const devChip = ms => {
+    const cls = Math.abs(ms) < 1800000 ? 'ontime' : ms > 0 ? 'late' : 'early';
+    const t = Math.abs(ms) < 1800000 ? 'по плану' : (ms > 0 ? 'опоздание ' : 'раньше ') + fmtDev(ms).slice(1);
+    return `<span class="chip ${cls}">${t}</span>`;
+  };
+  function factSummaryHtml(c) {
+    const fx = c.fx;
+    if (!fx.hasFact) return '';
+    const last = fx.ev[fx.lastIdx];
+    let h = `<div class="fact-sum">Последняя отметка: <b>${esc(evLabel(last, c.stopTimes.length))}, ${esc(portName(last.portId))}</b> — ${fmtDT(last.fact)}<br>
+      Отклонение от плана: <b>${fmtDev(fx.delay)}</b><br>
+      ${fx.done ? `Рейс завершён: <b>${fmtDT(fx.end)}</b> (план ${fmtDT(c.end)})` : `Прогноз окончания рейса: <b>${fmtDT(fx.end)}</b> (план ${fmtDT(c.end)})`}</div>`;
+    const bad = fx.checks.filter(k => !k.ok).map(k => k.text), good = fx.checks.filter(k => k.ok).map(k => k.text);
+    const order = fx.ev.filter(e => e.bad).map(e => `${evLabel(e, c.stopTimes.length)}, ${portName(e.portId)}: время раньше предыдущей отметки — проверьте дату.`);
+    if (bad.length || order.length) h += `<div class="warnbox" style="margin-bottom:8px">⚠ ${bad.concat(order).map(esc).join('<br>⚠ ')}</div>`;
+    if (good.length) h += `<div class="okbox" style="margin-bottom:8px">✓ ${good.map(esc).join('<br>✓ ')}</div>`;
+    return h;
   }
 
   // Линии-дедлайны: с портом — судно должно уйти из порта до даты; без порта — рейс должен закончиться до даты
@@ -601,11 +701,11 @@
   }
 
   /* ================= Боковая панель ================= */
-  const TABS = [['voyage', 'Рейс'], ['ports', 'Порты'], ['legs', 'Переходы'], ['ships', 'Суда'], ['lines', 'Линии']];
+  const TABS = [['voyage', 'Рейс'], ['fact', 'Факт'], ['ports', 'Порты'], ['legs', 'Переходы'], ['ships', 'Суда'], ['lines', 'Линии']];
 
   function renderSidebar() {
     const tab = state.settings.tab || 'voyage';
-    const views = { voyage: viewVoyage, ports: viewPorts, legs: viewLegs, ships: viewShips, lines: viewLines };
+    const views = { voyage: viewVoyage, fact: viewFact, ports: viewPorts, legs: viewLegs, ships: viewShips, lines: viewLines };
     $('#sidebar').innerHTML =
       `<div class="tabs">${TABS.map(([k, t]) => `<button class="tab ${tab === k ? 'active' : ''}" data-act="tab" data-tab="${k}">${t}</button>`).join('')}</div>` +
       `<div class="tab-body">${(views[tab] || viewVoyage)()}</div>`;
@@ -669,6 +769,33 @@
       </div>`;
     }
     h += checksHtml(c);
+    return h;
+  }
+
+  function viewFact() {
+    const v = selVoyage();
+    let h = `<div class="row"><select data-k="sel" title="Выбор рейса">${voyageOptions(v) || '<option>— нет рейсов —</option>'}</select></div>`;
+    if (!v) return h + '<p class="hint">Рейсов пока нет.</p>';
+    if (!v.stops.length) return h + '<p class="hint">В рейсе нет портов. Сначала составьте маршрут на вкладке «Рейс».</p>';
+    const c = computeVoyage(v), fx = c.fx, n = v.stops.length;
+    h += `<p class="hint">Введите фактические дату и время по мере прохождения контрольных точек. Кнопка «сейчас» подставляет текущее время. Пока рейс не завершён, оставшиеся точки прогнозируются со сдвигом на текущее отклонение.</p>`;
+    h += factSummaryHtml(c);
+    v.stops.forEach((s, i) => {
+      h += `<div class="fact-stop"><h4>${i + 1}. ${esc(portName(s.portId))} <span class="muted">— ${OPS[s.op].toLowerCase()}</span></h4>`;
+      fx.ev.filter(e => e.stopId === s.id).forEach(e => {
+        let tail;
+        if (e.fact != null) tail = devChip(e.fact - e.plan);
+        else if (e.forecast != null) tail = `<span class="muted">прогноз ${fmtShort(e.forecast)}</span>`;
+        else tail = '';
+        h += `<div class="ev ${e.bad ? 'bad' : ''}">
+          <div class="ev-name">${esc(evLabel(e, n))} <span class="muted">· план ${fmtShort(e.plan)}</span></div><div>${tail}</div>
+          <div class="ev-in"><input type="datetime-local" data-k="fact:${v.id}:${s.id}.${e.key}" value="${esc(e.raw)}" title="Фактическое время">
+            <button data-act="fact-now" data-v="${v.id}" data-s="${s.id}" data-e="${e.key}" title="Подставить текущее время">сейчас</button>
+            ${e.raw ? `<button class="icon danger" data-act="fact-clear" data-v="${v.id}" data-s="${s.id}" data-e="${e.key}" title="Очистить">✕</button>` : ''}</div>
+        </div>`;
+      });
+      h += `</div>`;
+    });
     return h;
   }
 
@@ -841,6 +968,7 @@
     else if (kind === 'ship' || kind === 'shipc') obj = shipById(id);
     else if (kind === 'dl') obj = state.deadlines.find(x => x.id === id);
     else if (kind === 'cost') obj = state.costs;
+    else if (kind === 'fact') { const v = state.voyages.find(x => x.id === id); if (v) obj = v.fact = v.fact || {}; }
     if (!obj) return;
     const parts = path.split('.');
     const field = parts.pop();
@@ -928,12 +1056,15 @@
       const v = { id: uid(), name: 'Рейс ' + (state.voyages.length + 1), shipId: ship ? ship.id : '', start: toDTInput(sod(Date.now()) + DAY + 8 * 3600000), stops: [] };
       state.voyages.push(v); state.settings.sel = v.id; state.settings.tab = 'voyage'; save(); renderAll();
     },
+    'fact-now': b => setFact(b.dataset, toDTInput(Date.now())),
+    'fact-clear': b => setFact(b.dataset, ''),
     'voy-copy': () => {
       const v = selVoyage(); if (!v) return;
       const c = computeVoyage(v);
       const n = JSON.parse(JSON.stringify(v));
       n.id = uid(); n.name = (v.name || 'Рейс') + ' (копия)'; n.start = toDTInput(c.end);
       n.stops.forEach(s => { s.id = uid(); });
+      delete n.fact; // копия — новый план без факта
       state.voyages.push(n); state.settings.sel = n.id; save(); renderAll();
     },
     'voy-del': () => {
@@ -1039,6 +1170,14 @@
     }
   };
 
+  function setFact(ds, val) {
+    const v = state.voyages.find(x => x.id === ds.v); if (!v) return;
+    v.fact = v.fact || {};
+    v.fact[ds.s] = v.fact[ds.s] || {};
+    if (val) v.fact[ds.s][ds.e] = val; else delete v.fact[ds.s][ds.e];
+    save(); renderAll();
+  }
+
   function focusRow(rowId, key) {
     const tr = document.querySelectorAll(`[data-row="${rowId}"]`);
     tr.forEach(r => r.classList.add('flash'));
@@ -1121,7 +1260,13 @@
 
     // Диапазон дат
     let min = now, max = now;
-    comp.forEach(c => { min = Math.min(min, c.start); max = Math.max(max, c.end); });
+    comp.forEach(c => {
+      min = Math.min(min, c.start); max = Math.max(max, c.end);
+      c.fx.ev.forEach(e => { if (e.fact != null) { min = Math.min(min, e.fact); max = Math.max(max, e.fact); } });
+      if (c.fx.end != null) max = Math.max(max, c.fx.end);
+    });
+    let anyFact = false;
+    comp.forEach(c => { if (c.fx.hasFact) anyFact = true; });
     state.deadlines.forEach(d => { const t = parseDT(d.date); if (!isNaN(t)) { min = Math.min(min, t); max = Math.max(max, t); } });
     min = addDaysCal(sod(min), -1); max = addDaysCal(sod(max), 2);
     if (scale === 'week') { min = mondayOf(min); max = addDaysCal(mondayOf(max), 7); }
@@ -1143,8 +1288,9 @@
       r.items = items; r.lanes = Math.max(1, ends.length);
     });
 
-    const labelW = 170, titleH = 28, headH = 46, bandH = 22, laneH = sz.rowH, rowPad = 4, legendH = 40;
-    const bh = Math.max(18, laneH - 30);
+    const labelW = 170, titleH = 28, headH = 46, bandH = 22, laneH = sz.rowH + (anyFact ? 14 : 0), rowPad = 4, legendH = 40;
+    const bh = Math.max(18, sz.rowH - 30);
+    const factH = anyFact ? 14 : 0; // полоса факта под планом
     const bodyTop = titleH + headH + bandH;
     let y = bodyTop;
     rows.forEach(r => { r.y = y; r.h = r.lanes * laneH + rowPad * 2; y += r.h; });
@@ -1224,10 +1370,12 @@
         if (c.segs.length) {
           const x1 = X(c.start), x2 = Math.max(X(c.end), x1 + 2);
           tips.push({ title: v.name || 'Рейс', lines: [`Судно: ${ship.name}`, `Начало: ${fmtDT(c.start)}`, `Окончание: ${fmtDT(c.end)}`, `Длительность: ${fmtDays(c.days)} (${fmtHours(c.days)})`], vid: v.id });
-          out.push(`<g class="blk" data-tip="${tips.length - 1}"><rect x="${x1}" y="${by + bh + 5}" width="${x2 - x1}" height="${isSel ? 5 : 3}" rx="1.5" fill="${sc}"/>` +
-            `<rect x="${x1}" y="${by + bh + 1}" width="${Math.max(x2 - x1, 1)}" height="22" fill="transparent"/>` +
-            T(x1 + 1, by + bh + 21, `${v.name || 'Рейс'} · ${fmtDays(c.days)}`, { fs: 10, weight: isSel ? 700 : 400, fill: '#3b4652' }) + `</g>`);
+          const bY = by + bh + factH;
+          out.push(`<g class="blk" data-tip="${tips.length - 1}"><rect x="${x1}" y="${bY + 5}" width="${x2 - x1}" height="${isSel ? 5 : 3}" rx="1.5" fill="${sc}"/>` +
+            `<rect x="${x1}" y="${bY + 1}" width="${Math.max(x2 - x1, 1)}" height="22" fill="transparent"/>` +
+            T(x1 + 1, bY + 21, `${v.name || 'Рейс'} · ${fmtDays(c.days)}${c.fx.hasFact && !c.fx.done ? ' · прогноз ' + fmtDev(c.fx.delay) : ''}`, { fs: 10, weight: isSel ? 700 : 400, fill: '#3b4652' }) + `</g>`);
         }
+        if (c.fx.hasFact) drawFact(v, c, sc, by + bh + 3, voyTitle);
         c.segs.forEach(s => {
           const x1 = X(s.start), w = Math.max(X(s.end) - x1, 0);
           let g = '';
@@ -1280,10 +1428,44 @@
         });
         if (isSel && c.segs.length) {
           const x1 = X(c.start) - 3, x2 = X(c.end) + 3;
-          out.push(`<rect x="${x1}" y="${by - 5}" width="${Math.max(x2 - x1, 6)}" height="${bh + 10}" rx="5" fill="none" stroke="${sc}" stroke-width="1.5" stroke-dasharray="4 3" pointer-events="none"/>`);
+          out.push(`<rect x="${x1}" y="${by - 5}" width="${Math.max(x2 - x1, 6)}" height="${bh + 10 + factH}" rx="5" fill="none" stroke="${sc}" stroke-width="1.5" stroke-dasharray="4 3" pointer-events="none"/>`);
         }
       });
     });
+
+    // Полоса факта: интервалы между отмеченными контрольными точками
+    function drawFact(v, c, sc, fy, voyTitle) {
+      const fx = c.fx, ev = fx.ev, fh = 9, n = c.stopTimes.length;
+      const kind = (a, b) => a.key === 'dep' && b.key === 'arr' ? 'transit'
+        : a.key.endsWith('Start') && b.key === a.key.replace('Start', 'End') ? a.key.replace('Start', '') : 'stay';
+      const col = k => k === 'transit' ? sc : COLORS[k] || '#868e96';
+      const kName = { transit: 'Переход', load: 'Погрузка', unload: 'Выгрузка', stay: 'Стоянка / ожидание' };
+      const planDur = (a, b) => (b.plan - a.plan) / DAY;
+      const seg = (a, b, t1, t2, live) => {
+        const k = kind(a, b), x1 = X(t1), w = Math.max(X(t2) - x1, 1);
+        const dur = (t2 - t1) / DAY;
+        tips.push({ title: `Факт: ${kName[k]} — ${k === 'transit' ? portName(a.portId) + ' → ' + portName(b.portId) : portName(a.portId)}`,
+          lines: [`${evLabel(a, n)}: ${fmtDT(t1)}`, live ? `Идёт сейчас (${fmtDT(t2)})` : `${evLabel(b, n)}: ${fmtDT(t2)}`,
+            `Длительность: ${fmtDays(dur)} (${fmtHours(dur)})`, `По плану: ${fmtDays(planDur(a, b))}`, voyTitle], vid: v.id });
+        out.push(`<g class="blk" data-tip="${tips.length - 1}"><rect x="${x1}" y="${fy}" width="${w}" height="${fh}" rx="2" fill="${col(k)}"${live ? ' fill-opacity="0.45"' : ''}/>` +
+          (live ? `<line x1="${x1 + w}" y1="${fy - 1}" x2="${x1 + w}" y2="${fy + fh + 1}" stroke="${col(k)}" stroke-width="2" stroke-dasharray="2 2"/>` : '') + `</g>`);
+      };
+      for (let i = 0; i + 1 < ev.length; i++) {
+        const a = ev[i], b = ev[i + 1];
+        if (a.fact != null && b.fact != null && b.fact > a.fact) seg(a, b, a.fact, b.fact, false);
+      }
+      const now = Date.now(), last = ev[fx.lastIdx], next = ev[fx.lastIdx + 1];
+      if (next && now > last.fact) seg(last, next, last.fact, now, true);
+      // Отметки фактических событий
+      ev.forEach(e => { if (e.fact != null) out.push(`<rect x="${X(e.fact) - 0.75}" y="${fy - 2}" width="1.5" height="${fh + 4}" fill="#1f2933" pointer-events="none"/>`); });
+      // Прогноз окончания рейса
+      if (!fx.done && fx.end != null) {
+        const xs = X(Math.max(now, last.fact)), xe = X(fx.end), ym = fy + fh / 2;
+        tips.push({ title: 'Прогноз окончания рейса', lines: [fmtDT(fx.end), `План: ${fmtDT(c.end)}`, `Отклонение: ${fmtDev(fx.delay)}`, voyTitle], vid: v.id });
+        out.push(`<g class="blk" data-tip="${tips.length - 1}"><line x1="${xs}" y1="${ym}" x2="${xe}" y2="${ym}" stroke="#495057" stroke-width="1.5" stroke-dasharray="4 3"/>` +
+          `<path d="M${xe} ${ym - 5} l5 5 l-5 5 l-5 -5 z" fill="#495057"/><rect x="${xs}" y="${fy - 2}" width="${Math.max(xe - xs, 8)}" height="${fh + 4}" fill="transparent"/></g>`);
+      }
+    }
 
     // Линия «сегодня» и дедлайны
     const markers = [];
@@ -1340,6 +1522,10 @@
     leg((x, y0) => `<path d="M${x + 10} ${y0 - 1} l8 8 l-8 8 l-8 -8 z" fill="#fff" stroke="${legShip}" stroke-width="2"/>`, 'Заход без операций');
     leg((x, y0) => `<line x1="${x}" y1="${y0 + 7}" x2="${x + 20}" y2="${y0 + 7}" stroke="#e03131" stroke-width="2"/>`, 'Сегодня');
     leg((x, y0) => `<line x1="${x}" y1="${y0 + 7}" x2="${x + 20}" y2="${y0 + 7}" stroke="#c92a2a" stroke-width="2" stroke-dasharray="5 3"/>`, 'Дедлайн');
+    if (anyFact) {
+      leg((x, y0) => `<rect x="${x}" y="${y0 + 2}" width="9" height="9" rx="1" fill="${COLORS.load}"/><rect x="${x + 11}" y="${y0 + 2}" width="9" height="9" rx="1" fill="#868e96"/>`, 'Факт (тонкая полоса под планом)');
+      leg((x, y0) => `<line x1="${x}" y1="${y0 + 7}" x2="${x + 14}" y2="${y0 + 7}" stroke="#495057" stroke-width="1.5" stroke-dasharray="4 3"/><path d="M${x + 16} ${y0 + 3} l4 4 l-4 4 l-4 -4 z" fill="#495057"/>`, 'Прогноз окончания');
+    }
     if (anyViolation) leg((x, y0) => `<rect x="${x + 1}" y="${y0}" width="18" height="14" rx="3" fill="none" stroke="#e03131" stroke-width="2.5"/>`, 'Нарушение срока');
     const Wf = Math.max(W, lx + 10);
 
@@ -1430,7 +1616,20 @@
           <tr><td></td><td colspan="2">Итого по рейсу</td><td>${fmtDT(c.start)}</td><td>${fmtDT(c.end)}</td><td class="r">${fmtNum(c.days)}</td><td class="r">${fmtHours(c.days)}</td></tr>
           <tr><td></td><td colspan="6" class="muted" style="font-weight:400">в т.ч. в пути ${fmtDays(c.totals.transit)} · грузовые операции ${fmtDays(c.totals.ops)} · запас ${fmtDays(c.totals.reserve)}</td></tr>
         </tfoot>
-      </table></div>${checksHtml(c)}`;
+      </table></div>${checksHtml(c)}${factTableHtml(v, c)}`;
+  }
+
+  function factTableHtml(v, c) {
+    const fx = c.fx, n = c.stopTimes.length;
+    if (!fx.hasFact) return `<p class="hint no-print" style="margin-top:10px">Фактические даты рейса вносятся на вкладке <button class="link" data-act="tab" data-tab="fact">«Факт»</button>.</p>`;
+    const rows = fx.ev.map(e => `<tr>
+      <td>${esc(portName(e.portId))}</td><td>${esc(evLabel(e, n))}</td><td>${fmtDT(e.plan)}</td>
+      ${e.fact != null ? `<td><b>${fmtDT(e.fact)}</b>${e.bad ? ' ⚠' : ''}</td><td>${devChip(e.fact - e.plan)}</td>`
+        : e.forecast != null ? `<td class="fc">прогноз ${fmtDT(e.forecast)}</td><td class="fc">${fmtDev(e.forecast - e.plan)}</td>` : '<td>—</td><td></td>'}</tr>`).join('');
+    return `<h2 style="margin-top:18px">План / факт по контрольным точкам</h2>${factSummaryHtml(c)}
+      <div class="scroll-x"><table class="grid">
+        <thead><tr><th>Порт</th><th>Событие</th><th>План</th><th>Факт / прогноз</th><th>Отклонение</th></tr></thead>
+        <tbody>${rows}</tbody></table></div>`;
   }
 
   function setPrintTitle() {
