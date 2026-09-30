@@ -157,6 +157,13 @@
   .main-tabs { display: flex; gap: 4px; }
   .main-tabs button { border-radius: 8px 8px 0 0; border-bottom: none; padding: 7px 14px; color: var(--muted); background: #e9edf2; }
   .main-tabs button.active { background: var(--panel); color: var(--accent); font-weight: 600; }
+  /* Лист «График»: только диаграмма на всю ширину и высоту окна */
+  body.mode-gantt .layout { grid-template-columns: minmax(0, 1fr); }
+  body.mode-gantt aside, body.mode-gantt .gutter-v, body.mode-gantt .gutter-h, body.mode-gantt #tableSection { display: none; }
+  body.mode-gantt .chart-wrap { height: auto; }
+  .only-gantt { display: none; }
+  body.mode-gantt .only-gantt { display: inline; }
+  body.mode-gantt .only-plan { display: none; }
   .toolbar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; padding: 8px 12px; border-top-left-radius: 0; }
   .toolbar label { display: inline-flex; gap: 6px; align-items: center; color: var(--muted); font-size: 12px; }
   .toolbar input[type=range] { width: 90px; }
@@ -242,7 +249,8 @@
   <main>
     <div class="print-title" id="printTitle"></div>
     <div class="main-tabs" id="mainTabs">
-      <button data-act="main-tab" data-t="chart">График рейсов</button>
+      <button data-act="main-tab" data-t="chart" title="Редактирование рейсов и справочников с превью графика">Планирование</button>
+      <button data-act="main-tab" data-t="gantt" title="Только график на весь экран">График</button>
       <button data-act="main-tab" data-t="costs">Расходы (тайм-чартер)</button>
     </div>
     <div id="viewChart">
@@ -256,7 +264,8 @@
         <label title="Высота строки судна">Высота строк <input type="range" id="rowRange" min="50" max="110" step="4"></label>
         <button data-act="scroll-today">К сегодняшнему дню</button>
         <button data-act="add-deadline">+ Линия-дедлайн</button>
-        <button data-act="reset-sizes" title="Вернуть размеры панелей и графика по умолчанию">Сбросить размеры</button>
+        <button class="only-plan" data-act="reset-sizes" title="Вернуть размеры панелей и графика по умолчанию">Сбросить размеры</button>
+        <span class="muted only-gantt">Двойной щелчок по рейсу — открыть его в «Планировании»</span>
       </div>
       <div class="panel chart-wrap" id="chartWrap"><div id="chart"></div></div>
       <div class="gutter-h" id="gutterH" title="Потяните, чтобы изменить высоту графика. Двойной щелчок — сбросить"></div>
@@ -1563,8 +1572,22 @@
   $('#chart').addEventListener('click', e => {
     const g = e.target.closest('[data-tip]'); if (!g) return;
     const tp = tips[+g.dataset.tip];
-    if (tp && tp.vid) { state.settings.sel = tp.vid; state.settings.tab = 'voyage'; save(); renderAll(); }
+    if (!tp || !tp.vid) return;
+    if (state.settings.mainTab === 'gantt') {
+      // на листе «График»: одиночный щелчок выделяет рейс, двойной — открывает его в «Планировании»
+      clearTimeout(clickTimer);
+      if (e.detail >= 2) {
+        state.settings.sel = tp.vid; state.settings.mainTab = 'chart'; state.settings.tab = 'voyage';
+        save(); renderAll(); return;
+      }
+      clickTimer = setTimeout(() => { state.settings.sel = tp.vid; save(); renderChart(); }, 250);
+      return;
+    }
+    state.settings.sel = tp.vid;
+    if (state.settings.tab !== 'fact') state.settings.tab = 'voyage';
+    save(); renderAll();
   });
+  let clickTimer = null;
 
   function exportPng() {
     if (state.settings.mainTab === 'costs') { state.settings.mainTab = 'chart'; save(); renderAll(); }
@@ -1633,19 +1656,30 @@
   }
 
   function setPrintTitle() {
-    $('#printTitle').textContent = (state.settings.mainTab === 'costs' ? 'Расходы по тайм-чартеру — ' : 'План рейсов судов — ') + fmtDT(Date.now());
+    $('#printTitle').textContent = (state.settings.mainTab === 'costs' ? 'Расходы по тайм-чартеру — ' : state.settings.mainTab === 'gantt' ? 'График рейсов судов — ' : 'План рейсов судов — ') + fmtDT(Date.now());
   }
 
   function renderAll(scrollToday) {
-    const mt = state.settings.mainTab === 'costs' ? 'costs' : 'chart';
+    const mt = ['costs', 'gantt'].includes(state.settings.mainTab) ? state.settings.mainTab : 'chart';
     document.querySelectorAll('#mainTabs button').forEach(b => b.classList.toggle('active', b.dataset.t === mt));
-    $('#viewChart').hidden = mt !== 'chart';
+    document.body.classList.toggle('mode-gantt', mt === 'gantt');
+    $('#viewChart').hidden = mt === 'costs';
     $('#viewCosts').hidden = mt !== 'costs';
-    renderSidebar();
+    fitChartHeight();
+    if (mt !== 'gantt') renderSidebar();
     renderChart(scrollToday);
     renderTable();
     renderCosts();
   }
+
+  // На листе «График» диаграмма занимает всю оставшуюся высоту окна; в «Планировании» — заданную пользователем
+  function fitChartHeight() {
+    const wrap = $('#chartWrap');
+    if (state.settings.mainTab === 'gantt') {
+      wrap.style.maxHeight = Math.max(300, window.innerHeight - wrap.getBoundingClientRect().top - 16) + 'px';
+    } else wrap.style.maxHeight = '';
+  }
+  window.addEventListener('resize', fitChartHeight);
 
   // Синхронизация между вкладками браузера
   window.addEventListener('storage', e => {
