@@ -439,11 +439,164 @@
     state.savedAt = new Date().toISOString();
     try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); lsOk = true; lastSaved = Date.now(); }
     catch (e) { lsOk = false; }
-    scheduleFileWrite();
+    if (srv.on) schedulePush(); else scheduleFileWrite();
     renderSaveBar();
   }
 
+  /* ================= Общие данные на сервере ================= */
+  // Если страница открыта через server.js, данные (справочники, рейсы, линии, расходы) хранятся на сервере
+  // и общие для всех пользователей. Настройки вида (вкладки, масштаб, размеры) остаются личными — в браузере.
+  // Конфликты одновременных правок: сервер принимает запись только от клиента, видевшего последнюю версию (rev);
+  // иначе клиент объединяет свои изменения с чужими по объектам (порт, переход, судно, рейс, линия) и повторяет.
+  const API = 'api/';
+  const SHARED_KEYS = ['version', 'ports', 'legs', 'ships', 'voyages', 'deadlines', 'costs'];
+  const SYNC_KEY = STORE_KEY + '.sync';
+  const COLLECTIONS = ['ports', 'legs', 'ships', 'voyages', 'deadlines'];
+  const srv = { on: false, rev: 0, base: null, client: uid(), timer: null, status: 'ok', err: '', lastSync: null, online: 0, chain: Promise.resolve(), es: null, pollTimer: null };
+  const clone = o => JSON.parse(JSON.stringify(o));
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  const sharedOf = st => { const o = {}; SHARED_KEYS.forEach(k => { if (st && st[k] !== undefined) o[k] = st[k]; }); return clone(o); };
+
+  // Трёхстороннее объединение: base — последняя версия с сервера, mine — мои данные, theirs — актуальные на сервере
+  function merge3(base, mine, theirs) {
+    base = base || {}; theirs = theirs || {};
+    const out = clone(theirs);
+    COLLECTIONS.forEach(col => {
+      const b = new Map((base[col] || []).map(x => [x.id, x]));
+      const m = new Map((mine[col] || []).map(x => [x.id, x]));
+      let arr = (out[col] || []).filter(x => !(b.has(x.id) && !m.has(x.id))); // удалённое мной
+      (mine[col] || []).forEach(x => {
+        const was = b.get(x.id);
+        if (was && same(was, x)) return; // не менял — оставляем чужую версию
+        const i = arr.findIndex(y => y.id === x.id);
+        if (i >= 0) arr[i] = clone(x); else if (!was) arr.push(clone(x)); // изменённое/добавленное мной
+      });
+      out[col] = arr;
+    });
+    out.costs = Object.assign({}, theirs.costs);
+    Object.keys(mine.costs || {}).forEach(k => { if (!base.costs || !same(base.costs[k], mine.costs[k])) out.costs[k] = mine.costs[k]; });
+    out.version = Math.max(+mine.version || 0, +theirs.version || 0);
+    return out;
+  }
+
+  function saveSync(dirty) {
+    try { localStorage.setItem(SYNC_KEY, JSON.stringify({ rev: srv.rev, base: srv.base, dirty })); } catch (e) { }
+  }
+  function readSync() { try { return JSON.parse(localStorage.getItem(SYNC_KEY)); } catch (e) { return null; } }
+  const isDirty = () => !same(sharedOf(state), srv.base);
+
+  // Применить общие данные, сохранив личные настройки и, по возможности, фокус ввода
+  function applyShared(d) {
+    const settings = state.settings;
+    state = normalize(Object.assign(clone(d), { settings }));
+    try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch (e) { }
+    renderKeepFocus();
+  }
+
+  // Операции с сервером выполняются строго по очереди; при сбое — повтор через 5 с
+  const queue = fn => (srv.chain = srv.chain.then(fn).catch(e => {
+    srv.status = 'error'; srv.err = e.message; renderSaveBar();
+    clearTimeout(srv.retry);
+    srv.retry = setTimeout(() => { queue(pull); queue(push); }, 5000);
+  }));
+
+  function schedulePush() {
+    if (!srv.on) return;
+    const dirty = isDirty();
+    saveSync(dirty);
+    if (!dirty) return;
+    clearTimeout(srv.timer);
+    srv.timer = setTimeout(() => queue(push), 600);
+  }
+
+  async function push() {
+    let mine = sharedOf(state);
+    if (same(mine, srv.base)) return;
+    srv.status = 'saving'; renderSaveBar();
+    let data = mine;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const r = await fetch(API + 'state', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ baseRev: srv.rev, data, client: srv.client }) });
+      if (r.status === 409) {
+        const cur = await r.json();
+        data = merge3(srv.base, data, cur.data);
+        srv.rev = cur.rev; srv.base = cur.data;
+        continue;
+      }
+      if (!r.ok) throw new Error('сервер ответил ' + r.status);
+      const res = await r.json();
+      srv.rev = res.rev; srv.base = clone(data);
+      srv.status = 'ok'; srv.err = ''; srv.lastSync = Date.now();
+      // Если пришлось объединять с чужими правками — показать результат, сохранив то, что пользователь успел ввести
+      if (!same(data, mine)) applyShared(merge3(mine, sharedOf(state), data));
+      saveSync(isDirty());
+      renderSaveBar();
+      if (isDirty()) schedulePush();
+      return;
+    }
+    throw new Error('не удалось согласовать изменения');
+  }
+
+  async function pull() {
+    const r = await fetch(API + 'state', { cache: 'no-store' });
+    if (!r.ok) throw new Error('сервер ответил ' + r.status);
+    const cur = await r.json();
+    srv.status = 'ok'; srv.err = '';
+    if (cur.rev === srv.rev) { renderSaveBar(); return; }
+    const local = sharedOf(state);
+    const next = cur.data == null ? local : isDirty() ? merge3(srv.base, local, cur.data) : cur.data;
+    srv.rev = cur.rev; srv.base = cur.data;
+    srv.status = 'ok'; srv.err = ''; srv.lastSync = Date.now();
+    if (!same(next, local)) applyShared(next);
+    schedulePush();
+    renderSaveBar();
+  }
+
+  function connectEvents() {
+    if (!window.EventSource) { srv.pollTimer = setInterval(() => queue(pull), 15000); return; }
+    const es = srv.es = new EventSource(API + 'events');
+    es.addEventListener('rev', e => {
+      const m = JSON.parse(e.data);
+      if (m.client !== srv.client && m.rev !== srv.rev) queue(pull);
+    });
+    es.addEventListener('presence', e => { srv.online = JSON.parse(e.data).online; renderSaveBar(); });
+    es.onopen = () => { if (srv.status !== 'ok' && srv.status !== 'saving') { queue(pull); queue(push); } renderSaveBar(); };
+    es.onerror = () => { srv.status = 'offline'; renderSaveBar(); };
+  }
+
+  async function initServer() {
+    if (location.protocol === 'file:') return false;
+    let cur;
+    try {
+      const r = await fetch(API + 'state', { cache: 'no-store' });
+      if (!r.ok || !(r.headers.get('content-type') || '').includes('json')) return false;
+      cur = await r.json();
+      if (typeof cur.rev !== 'number') return false;
+    } catch (e) { return false; }
+    srv.on = true;
+    const saved = readSync();
+    srv.rev = cur.rev; srv.base = cur.data; srv.lastSync = Date.now();
+    let next;
+    if (cur.data == null) next = sharedOf(state); // сервер пуст — первые данные берём из этого браузера
+    else if (saved && saved.dirty) next = merge3(saved.base, sharedOf(state), cur.data); // неотправленные правки с прошлого раза
+    else next = cur.data;
+    applyShared(next);
+    renderAll(true);
+    schedulePush();
+    connectEvents();
+    renderSaveBar();
+    return true;
+  }
+
   function renderSaveBar() {
+    if (srv.on) {
+      const st = srv.status === 'saving' ? '<span class="ok">⏳ сохранение на сервере…</span>'
+        : srv.status === 'offline' ? '<span class="bad">⚠ нет связи с сервером — изменения сохранены в этом браузере и будут отправлены при восстановлении связи</span>'
+        : srv.status === 'error' ? `<span class="bad">⚠ нет связи с сервером (${esc(srv.err)}) — изменения сохранены в этом браузере, повторная отправка через несколько секунд</span>`
+        : `<span class="ok">✓ Общие данные сохранены на сервере${srv.lastSync ? ' · ' + fmtTime(srv.lastSync) : ''}</span>`;
+      $('#saveBar').innerHTML = `🌐 ${st}${srv.online ? ` · <span title="Сейчас открыто окон с планировщиком">онлайн: ${srv.online}</span>` : ''}`;
+      $('#storageBanner').hidden = true;
+      return;
+    }
     let h = lsOk
       ? `<span class="ok">✓ Автосохранено в браузере${lastSaved ? ' в ' + fmtTime(lastSaved) : ''}</span>`
       : `<span class="bad">⚠ Браузер не разрешил сохранение — используйте «Сохранять в файл» или «Экспорт JSON»</span>`;
@@ -989,10 +1142,18 @@
     } else obj[field] = el.value;
   }
 
-  function restoreFocus(key) {
+  // Перерисовать всё, сохранив поле ввода в фокусе и положение курсора в нём
+  function renderKeepFocus() {
+    const a = document.activeElement;
+    const key = a && a.dataset ? a.dataset.k : null;
+    let pos = null;
+    try { pos = a && typeof a.selectionStart === 'number' ? a.selectionStart : null; } catch (e) { }
+    renderAll();
     if (!key) return;
     const el = document.querySelector(`[data-k="${CSS.escape(key)}"]`);
-    if (el && document.activeElement !== el) el.focus();
+    if (!el) return;
+    if (document.activeElement !== el) el.focus();
+    if (pos != null && el.setSelectionRange) try { el.setSelectionRange(pos, pos); } catch (e) { }
   }
   // Любое изменение поля сразу сохраняется
   document.addEventListener('input', e => {
@@ -1007,9 +1168,7 @@
     if (!el.dataset || !el.dataset.k) return;
     applyField(el); save();
     setTimeout(() => { // после перехода фокуса — перерисовать и вернуть фокус
-      const a = document.activeElement;
-      const key = a && a.dataset ? a.dataset.k : null;
-      renderAll(); restoreFocus(key);
+      renderKeepFocus();
     }, 0);
   });
 
@@ -1146,7 +1305,7 @@
     'export-png': () => exportPng(),
     'print': () => { setPrintTitle(); window.print(); },
     'reset-demo': () => {
-      if (!confirm('Заменить все текущие данные демонстрационными? Текущие данные будут потеряны (сначала можно сделать экспорт JSON).')) return;
+      if (!confirm((srv.on ? 'Данные общие для всех пользователей!\n' : '') + 'Заменить все текущие данные демонстрационными? Текущие данные будут потеряны (сначала можно сделать экспорт JSON).')) return;
       state = demoData(); save(); applySizes(); renderAll(true);
     },
     'reset-sizes': () => { state.settings.sizes = {}; save(); applySizes(); renderChart(); },
@@ -1206,7 +1365,7 @@
     r.onload = () => {
       try {
         const d = normalize(JSON.parse(r.result));
-        if (!confirm(`Загрузить данные из файла «${f.name}»?\nПортов: ${d.ports.length}, переходов: ${d.legs.length}, судов: ${d.ships.length}, рейсов: ${d.voyages.length}.\nТекущие данные будут заменены.`)) return;
+        if (!confirm(`Загрузить данные из файла «${f.name}»?\nПортов: ${d.ports.length}, переходов: ${d.legs.length}, судов: ${d.ships.length}, рейсов: ${d.voyages.length}.\nТекущие данные будут заменены${srv.on ? ' для всех пользователей' : ''}.`)) return;
         state = d; save(); applySizes(); renderAll(true);
       } catch (err) { alert('Не удалось прочитать файл: ' + err.message); }
       finally { e.target.value = ''; }
@@ -1683,7 +1842,7 @@
 
   // Синхронизация между вкладками браузера
   window.addEventListener('storage', e => {
-    if (e.key !== STORE_KEY || !e.newValue) return;
+    if (srv.on || e.key !== STORE_KEY || !e.newValue) return;
     try { state = normalize(JSON.parse(e.newValue)); applySizes(); renderAll(); } catch (_) { }
   });
   window.addEventListener('beforeprint', setPrintTitle);
@@ -1693,7 +1852,7 @@
   applySizes();
   save();
   renderAll(true);
-  restoreFileHandle();
+  initServer().then(on => { if (!on) restoreFileHandle(); });
 })();
 </script>
 </body>
