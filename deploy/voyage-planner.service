@@ -1,0 +1,23 @@
+# Служба systemd для сервера планировщика.
+# Установка: sudo cp deploy/voyage-planner.service /etc/systemd/system/
+#            sudo systemctl daemon-reload && sudo systemctl enable --now voyage-planner
+[Unit]
+Description=Voyage planner (shared data server)
+After=network.target
+
+[Service]
+Type=simple
+User=voyage
+WorkingDirectory=/opt/voyage-planner
+ExecStart=/usr/bin/node /opt/voyage-planner/server.js
+Environment=HOST=127.0.0.1
+Environment=PORT=8080
+Environment=DATA_DIR=/var/lib/voyage-planner
+# Логин и пароль для входа (уберите обе строки, если пароль не нужен):
+Environment=AUTH_USER=fleet
+Environment=AUTH_PASS=ЗАМЕНИТЕ_ПАРОЛЬ
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
