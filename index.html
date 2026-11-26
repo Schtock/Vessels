@@ -209,6 +209,8 @@
   .print-title { display: none; }
   [hidden] { display: none !important; }
 
+  .shared-view .layout { grid-template-columns: minmax(0, 1fr); }
+  .shared-view #sidebar, .shared-view #gutterV, .shared-view .editor-only { display: none; }
   @media print {
     @page { size: A4 landscape; margin: 10mm; }
     body { background: #fff; font-size: 11px; }
@@ -233,11 +235,12 @@
   <div class="brand">⚓ Планировщик рейсов судов</div>
   <div class="hdr-actions">
     <button data-act="export-json" title="Скачать все данные в файл JSON">Экспорт JSON</button>
-    <button data-act="import-json" title="Загрузить данные из файла JSON">Импорт JSON</button>
+    <button data-act="import-json" class="editor-only" title="Загрузить данные из файла JSON">Импорт JSON</button>
+    <button data-act="publish-shared" class="editor-only" title="Скачать общий план для просмотра из сетевой папки">Общий план…</button>
     <input type="file" id="fileInput" accept=".json,application/json" hidden>
     <button data-act="export-png" title="Сохранить график картинкой">Экспорт PNG</button>
     <button data-act="print" title="Печать или сохранение в PDF (альбомная ориентация)">Печать / PDF</button>
-    <button data-act="reset-demo" title="Заменить данные демонстрационными">Демо-данные</button>
+    <button data-act="reset-demo" class="editor-only" title="Заменить данные демонстрационными">Демо-данные</button>
   </div>
 </header>
 <div class="save-bar" id="saveBar"></div>
@@ -263,7 +266,7 @@
         <label title="Ширина одного дня на графике">Ширина <input type="range" id="zoomRange" min="50" max="250" step="10"></label>
         <label title="Высота строки судна">Высота строк <input type="range" id="rowRange" min="50" max="110" step="4"></label>
         <button data-act="scroll-today">К сегодняшнему дню</button>
-        <button data-act="add-deadline">+ Линия-дедлайн</button>
+        <button data-act="add-deadline" class="editor-only">+ Линия-дедлайн</button>
         <button class="only-plan" data-act="reset-sizes" title="Вернуть размеры панелей и графика по умолчанию">Сбросить размеры</button>
         <span class="muted only-gantt">Двойной щелчок по рейсу — открыть его в «Планировании»</span>
       </div>
@@ -277,6 +280,7 @@
 
 <div id="tooltip"></div>
 
+<script type="application/json" id="sharedSnapshot"></script>
 <script>
 (function () {
   'use strict';
@@ -296,6 +300,9 @@
   const DEF_SIZES = { sideW: 420, chartH: null, zoom: 100, rowH: 62 };
 
   const $ = (s, r = document) => r.querySelector(s);
+  const snapshotText = $('#sharedSnapshot').textContent;
+  const sharedView = snapshotText !== '';
+  const publishTemplate = sharedView ? null : document.documentElement.cloneNode(true);
   const uid = () => Math.random().toString(36).slice(2, 10);
   const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const pad = n => String(n).padStart(2, '0');
@@ -418,10 +425,29 @@
 
   let state;
   let lsOk = true;
-  try {
-    const raw = localStorage.getItem(STORE_KEY);
-    state = raw ? normalize(JSON.parse(raw)) : demoData();
-  } catch (e) { state = demoData(); }
+  let publishedAt = null;
+  if (sharedView) {
+    document.body.classList.add('shared-view');
+    try {
+      const snapshot = JSON.parse(snapshotText);
+      state = normalize(snapshot.data);
+      publishedAt = Date.parse(snapshot.publishedAt);
+    } catch (e) {
+      $('#saveBar').textContent = 'Общий план повреждён. Откройте новую копию файла.';
+      $('#layout').hidden = true;
+      $('#layout').style.display = 'none';
+      return;
+    }
+    const planTab = $('#mainTabs [data-t="chart"]');
+    planTab.textContent = 'Рейсы';
+    planTab.title = 'График и подробности рейса';
+    $('.only-gantt.muted').textContent = 'Двойной щелчок по рейсу — открыть подробности';
+  } else {
+    try {
+      const raw = localStorage.getItem(STORE_KEY);
+      state = raw ? normalize(JSON.parse(raw)) : demoData();
+    } catch (e) { state = demoData(); }
+  }
 
   /* ================= Сохранение ================= */
   // 1) Автоматически в хранилище браузера (localStorage) после каждого изменения.
@@ -430,6 +456,7 @@
   let lastSaved = null, fileHandle = null, pendingHandle = null, fileState = '', fileTimer = null;
 
   function save() {
+    if (sharedView) return;
     state.savedAt = new Date().toISOString();
     try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); lsOk = true; lastSaved = Date.now(); }
     catch (e) { lsOk = false; }
@@ -582,6 +609,10 @@
   }
 
   function renderSaveBar() {
+    if (sharedView) {
+      $('#saveBar').textContent = 'Общий план · просмотр' + (Number.isFinite(publishedAt) ? ' · опубликован ' + fmtDT(publishedAt) : '');
+      return;
+    }
     if (srv.on) {
       const st = srv.status === 'saving' ? '<span class="ok">⏳ сохранение на сервере…</span>'
         : srv.status === 'offline' ? '<span class="bad">⚠ нет связи с сервером — изменения сохранены в этом браузере и будут отправлены при восстановлении связи</span>'
@@ -1073,14 +1104,14 @@
   /* ================= Лист «Расходы (тайм-чартер)» ================= */
   function renderCosts() {
     if (state.settings.mainTab !== 'costs') return;
-    const inp = (k, val, w) => `<input type="text" inputmode="decimal" class="num-in" data-k="${k}" value="${fmtIn(val)}" placeholder="0"${w ? ` style="width:${w}px"` : ''}>`;
+    const inp = (k, val, w) => `<input type="text" inputmode="decimal" class="num-in" data-k="${k}" value="${fmtIn(val)}" placeholder="0"${sharedView ? ' readonly' : ''}${w ? ` style="width:${w}px"` : ''}>`;
     $('#viewCosts').innerHTML = `<h2>Расчёт расходов по тайм-чартеру</h2>
     <p class="hint">Фрахт = ставка × сутки рейса. Топливо = сутки в режиме × расход × цена. Режимы: <b>переход</b> — время в пути; <b>стоянка</b> — запас (очередь, непогода) и грузовые операции береговыми средствами; <b>судовые краны</b> — грузовые операции в портах, отмеченных «Суд. краны» в справочнике портов.</p>
     <h3>Цены на топливо</h3>
     <div class="params">
       <label>Тяжёлое топливо (HFO/IFO), <span class="cur">${cur()}</span>/т ${inp('cost::hfo', state.costs.hfo, 80)}</label>
       <label>Дизельное топливо (MGO/ДТ), <span class="cur">${cur()}</span>/т ${inp('cost::mgo', state.costs.mgo, 80)}</label>
-      <label>Валюта <select data-k="cost::currency">${Object.keys(CURRENCIES).map(k => `<option ${k === state.costs.currency ? 'selected' : ''}>${k}</option>`).join('')}</select></label>
+      <label>Валюта <select data-k="cost::currency"${sharedView ? ' disabled' : ''}>${Object.keys(CURRENCIES).map(k => `<option ${k === state.costs.currency ? 'selected' : ''}>${k}</option>`).join('')}</select></label>
     </div>
     <h3>Параметры судов</h3>
     <div class="scroll-x"><table class="grid ship-params">
@@ -1160,6 +1191,7 @@
   function applyField(el) {
     const key = el.dataset.k;
     if (key === 'sel') { state.settings.sel = el.value; return; }
+    if (sharedView) return;
     const [kind, id, path] = key.split(':');
     let obj = null;
     if (kind === 'voy') obj = state.voyages.find(x => x.id === id);
@@ -1339,6 +1371,13 @@
     'export-json': () => {
       const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
       download(blob, `voyages_${isoDate(Date.now())}.json`);
+    },
+    'publish-shared': () => {
+      if (!publishTemplate) return;
+      const payload = { publishedAt: new Date().toISOString(), data: sharedOf(state) };
+      $('#sharedSnapshot', publishTemplate).textContent = JSON.stringify(payload).replace(/</g, '\\u003c');
+      const html = '<!DOCTYPE html>\n' + publishTemplate.outerHTML;
+      download(new Blob([html], { type: 'text/html;charset=utf-8' }), 'shared-plan.html');
     },
     'import-json': () => $('#fileInput').click(),
     'export-png': () => exportPng(),
@@ -1810,7 +1849,8 @@
       <td>${fmtDT(s.end)}</td>
       <td class="r">${fmtNum(s.days)}</td>
       <td class="r">${fmtHours(s.days)}</td></tr>`).join('');
-    sec.innerHTML = `<h2>${esc(v.name || 'Рейс')}</h2>
+    sec.innerHTML = `${sharedView ? `<label class="no-print">Рейс <select data-k="sel">${voyageOptions(v)}</select></label>` : ''}
+      <h2>${esc(v.name || 'Рейс')}</h2>
       <div class="muted" style="margin-bottom:8px">Судно: <b>${esc(ship ? ship.name : '—')}</b> · начало ${fmtDT(c.start)} · окончание ${fmtDT(c.end)}</div>
       <div class="scroll-x">
       <table class="grid">
@@ -1825,7 +1865,7 @@
 
   function factTableHtml(c) {
     const fx = c.fx, n = c.stopTimes.length;
-    if (!fx.hasFact) return `<p class="hint no-print" style="margin-top:10px">Фактические даты рейса вносятся на вкладке <button class="link" data-act="tab" data-tab="fact">«Факт»</button>.</p>`;
+    if (!fx.hasFact) return sharedView ? '' : `<p class="hint no-print" style="margin-top:10px">Фактические даты рейса вносятся на вкладке <button class="link" data-act="tab" data-tab="fact">«Факт»</button>.</p>`;
     const rows = fx.ev.map((e, i) => {
       const prev = fx.ev[i - 1];
       const stage = prev ? FACT_STAGE_LABEL[factStage(prev, e)] : '—';
@@ -1855,7 +1895,7 @@
     $('#viewChart').hidden = mt === 'costs';
     $('#viewCosts').hidden = mt !== 'costs';
     fitChartHeight();
-    if (mt !== 'gantt') renderSidebar();
+    if (!sharedView && mt !== 'gantt') renderSidebar();
     renderChart(scrollToday);
     renderTable();
     renderCosts();
@@ -1872,17 +1912,17 @@
 
   // Синхронизация между вкладками браузера
   window.addEventListener('storage', e => {
-    if (srv.on || e.key !== STORE_KEY || !e.newValue) return;
+    if (sharedView || srv.on || e.key !== STORE_KEY || !e.newValue) return;
     try { state = normalize(JSON.parse(e.newValue)); applySizes(); renderAll(); } catch (_) { }
   });
   window.addEventListener('beforeprint', setPrintTitle);
   window.addEventListener('pagehide', save);
 
-  try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (_) { }
+  if (!sharedView) try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (_) { }
   applySizes();
-  save();
+  if (sharedView) renderSaveBar(); else save();
   renderAll(true);
-  initServer().then(on => { if (!on) restoreFileHandle(); });
+  if (!sharedView) initServer().then(on => { if (!on) restoreFileHandle(); });
 })();
 </script>
 </body>
