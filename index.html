@@ -209,8 +209,6 @@
   .print-title { display: none; }
   [hidden] { display: none !important; }
 
-  .shared-view .layout { grid-template-columns: minmax(0, 1fr); }
-  .shared-view #sidebar, .shared-view #gutterV, .shared-view .editor-only { display: none; }
   @media print {
     @page { size: A4 landscape; margin: 10mm; }
     body { background: #fff; font-size: 11px; }
@@ -235,12 +233,11 @@
   <div class="brand">⚓ Планировщик рейсов судов</div>
   <div class="hdr-actions">
     <button data-act="export-json" title="Скачать все данные в файл JSON">Экспорт JSON</button>
-    <button data-act="import-json" class="editor-only" title="Загрузить данные из файла JSON">Импорт JSON</button>
-    <button data-act="publish-shared" class="editor-only" title="Скачать общий план для просмотра из сетевой папки">Общий план…</button>
+    <button data-act="import-json" title="Загрузить данные из файла JSON">Импорт JSON</button>
     <input type="file" id="fileInput" accept=".json,application/json" hidden>
     <button data-act="export-png" title="Сохранить график картинкой">Экспорт PNG</button>
     <button data-act="print" title="Печать или сохранение в PDF (альбомная ориентация)">Печать / PDF</button>
-    <button data-act="reset-demo" class="editor-only" title="Заменить данные демонстрационными">Демо-данные</button>
+    <button data-act="reset-demo" title="Заменить данные демонстрационными">Демо-данные</button>
   </div>
 </header>
 <div class="save-bar" id="saveBar"></div>
@@ -266,7 +263,7 @@
         <label title="Ширина одного дня на графике">Ширина <input type="range" id="zoomRange" min="50" max="250" step="10"></label>
         <label title="Высота строки судна">Высота строк <input type="range" id="rowRange" min="50" max="110" step="4"></label>
         <button data-act="scroll-today">К сегодняшнему дню</button>
-        <button data-act="add-deadline" class="editor-only">+ Линия-дедлайн</button>
+        <button data-act="add-deadline">+ Линия-дедлайн</button>
         <button class="only-plan" data-act="reset-sizes" title="Вернуть размеры панелей и графика по умолчанию">Сбросить размеры</button>
         <span class="muted only-gantt">Двойной щелчок по рейсу — открыть его в «Планировании»</span>
       </div>
@@ -280,7 +277,6 @@
 
 <div id="tooltip"></div>
 
-<script type="application/json" id="sharedSnapshot"></script>
 <script>
 (function () {
   'use strict';
@@ -300,9 +296,6 @@
   const DEF_SIZES = { sideW: 420, chartH: null, zoom: 100, rowH: 62 };
 
   const $ = (s, r = document) => r.querySelector(s);
-  const snapshotText = $('#sharedSnapshot').textContent;
-  const sharedView = snapshotText !== '';
-  const publishTemplate = sharedView ? null : document.documentElement.cloneNode(true);
   const uid = () => Math.random().toString(36).slice(2, 10);
   const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const pad = n => String(n).padStart(2, '0');
@@ -425,29 +418,10 @@
 
   let state;
   let lsOk = true;
-  let publishedAt = null;
-  if (sharedView) {
-    document.body.classList.add('shared-view');
-    try {
-      const snapshot = JSON.parse(snapshotText);
-      state = normalize(snapshot.data);
-      publishedAt = Date.parse(snapshot.publishedAt);
-    } catch (e) {
-      $('#saveBar').textContent = 'Общий план повреждён. Откройте новую копию файла.';
-      $('#layout').hidden = true;
-      $('#layout').style.display = 'none';
-      return;
-    }
-    const planTab = $('#mainTabs [data-t="chart"]');
-    planTab.textContent = 'Рейсы';
-    planTab.title = 'График и подробности рейса';
-    $('.only-gantt.muted').textContent = 'Двойной щелчок по рейсу — открыть подробности';
-  } else {
-    try {
-      const raw = localStorage.getItem(STORE_KEY);
-      state = raw ? normalize(JSON.parse(raw)) : demoData();
-    } catch (e) { state = demoData(); }
-  }
+  try {
+    const raw = localStorage.getItem(STORE_KEY);
+    state = raw ? normalize(JSON.parse(raw)) : demoData();
+  } catch (e) { state = demoData(); }
 
   /* ================= Сохранение ================= */
   // 1) Автоматически в хранилище браузера (localStorage) после каждого изменения.
@@ -456,7 +430,6 @@
   let lastSaved = null, fileHandle = null, pendingHandle = null, fileState = '', fileTimer = null;
 
   function save() {
-    if (sharedView) return;
     state.savedAt = new Date().toISOString();
     try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); lsOk = true; lastSaved = Date.now(); }
     catch (e) { lsOk = false; }
@@ -609,10 +582,6 @@
   }
 
   function renderSaveBar() {
-    if (sharedView) {
-      $('#saveBar').textContent = 'Общий план · просмотр' + (Number.isFinite(publishedAt) ? ' · опубликован ' + fmtDT(publishedAt) : '');
-      return;
-    }
     if (srv.on) {
       const st = srv.status === 'saving' ? '<span class="ok">⏳ сохранение на сервере…</span>'
         : srv.status === 'offline' ? '<span class="bad">⚠ нет связи с сервером — изменения сохранены в этом браузере и будут отправлены при восстановлении связи</span>'
@@ -1104,14 +1073,14 @@
   /* ================= Лист «Расходы (тайм-чартер)» ================= */
   function renderCosts() {
     if (state.settings.mainTab !== 'costs') return;
-    const inp = (k, val, w) => `<input type="text" inputmode="decimal" class="num-in" data-k="${k}" value="${fmtIn(val)}" placeholder="0"${sharedView ? ' readonly' : ''}${w ? ` style="width:${w}px"` : ''}>`;
+    const inp = (k, val, w) => `<input type="text" inputmode="decimal" class="num-in" data-k="${k}" value="${fmtIn(val)}" placeholder="0"${w ? ` style="width:${w}px"` : ''}>`;
     $('#viewCosts').innerHTML = `<h2>Расчёт расходов по тайм-чартеру</h2>
     <p class="hint">Фрахт = ставка × сутки рейса. Топливо = сутки в режиме × расход × цена. Режимы: <b>переход</b> — время в пути; <b>стоянка</b> — запас (очередь, непогода) и грузовые операции береговыми средствами; <b>судовые краны</b> — грузовые операции в портах, отмеченных «Суд. краны» в справочнике портов.</p>
     <h3>Цены на топливо</h3>
     <div class="params">
       <label>Тяжёлое топливо (HFO/IFO), <span class="cur">${cur()}</span>/т ${inp('cost::hfo', state.costs.hfo, 80)}</label>
       <label>Дизельное топливо (MGO/ДТ), <span class="cur">${cur()}</span>/т ${inp('cost::mgo', state.costs.mgo, 80)}</label>
-      <label>Валюта <select data-k="cost::currency"${sharedView ? ' disabled' : ''}>${Object.keys(CURRENCIES).map(k => `<option ${k === state.costs.currency ? 'selected' : ''}>${k}</option>`).join('')}</select></label>
+      <label>Валюта <select data-k="cost::currency">${Object.keys(CURRENCIES).map(k => `<option ${k === state.costs.currency ? 'selected' : ''}>${k}</option>`).join('')}</select></label>
     </div>
     <h3>Параметры судов</h3>
     <div class="scroll-x"><table class="grid ship-params">
@@ -1128,6 +1097,12 @@
     renderCostCalc();
   }
 
+  function costDelta(planned, calculated) {
+    if (!Number.isFinite(planned) || !Number.isFinite(calculated)) return '—';
+    const delta = Math.round(calculated - planned);
+    return (delta > 0 ? '+' : delta < 0 ? '−' : '') + fmtMoney(Math.abs(delta));
+  }
+
   function renderCostCalc() {
     const box = $('#costCalc'); if (!box) return;
     const v = selVoyage();
@@ -1138,26 +1113,30 @@
       const k = timeline ? voyageCosts(v, c, timeline) : plan;
       const sh = k.ship;
       const cons = sh ? sh.cons : emptyCons();
+      const amount = n => Number.isFinite(n) ? fmtMoney(n) : '—';
+      const comparison = (planned, calculated) => `<td class="money">${amount(planned)}</td>
+        <td class="money">${timeline ? amount(calculated) : '—'}</td>
+        <td class="money">${timeline ? costDelta(planned, calculated) : '—'}</td>`;
       const fr = (label, key, note) => {
         const f = k.fuel[key];
         return `<tr><td>${label}<div class="muted">${note} · ${fmtNum(num0(cons[key].hfo))} т/сут. тяж. + ${fmtNum(num0(cons[key].mgo))} т/сут. диз.</div></td>
-          <td class="r">${fmtNum(f.days)}</td><td class="r">${fmtNum(f.hfo, 1)}</td><td class="r">${fmtNum(f.mgo, 1)}</td><td class="money">${fmtMoney(f.cost)}</td></tr>`;
+          <td class="r">${fmtNum(f.days)}</td><td class="r">${fmtNum(f.hfo, 1)}</td><td class="r">${fmtNum(f.mgo, 1)}</td>${comparison(plan.fuel[key].cost, f.cost)}</tr>`;
       };
       h += `<div class="muted" style="margin-bottom:6px">${esc(v.name)} · судно <b>${esc(sh ? sh.name : '—')}</b> · ${fmtDT(timeline?.start ?? c.start)} — ${fmtDT(timeline?.end ?? c.end)}</div>
-      <p><b>${timeline ? timeline.complete ? 'По фактическим датам' : 'Оценка по факту и прогнозу' : 'По плановым датам'}</b>${timeline ? ` · по плану ${fmtMoney(plan.total)}` : ''}</p>
+      <p><b>${timeline ? timeline.complete ? 'По фактическим датам' : 'Оценка по факту и прогнозу' : 'По плановым датам'}</b></p>
       ${timeline && !timeline.complete ? '<p class="hint">Для точек без отметок используются расчётные даты.</p>' : ''}
       ${c.fx.hasFact && !timeline ? '<div class="warnbox">⚠ Проверьте последовательность плановых и фактических дат. Показана стоимость по плану.</div>' : ''}
       <div class="scroll-x"><table class="grid calc">
-        <thead><tr><th>Статья</th><th class="r">Сутки</th><th class="r">Тяжёлое, т</th><th class="r">Дизельное, т</th><th class="r">Сумма</th></tr></thead>
+        <thead><tr><th>Статья</th><th class="r">Сутки</th><th class="r">Тяжёлое, т</th><th class="r">Дизельное, т</th><th class="r">План</th><th class="r">${timeline && !timeline.complete ? 'Оценка' : 'Факт'}</th><th class="r">Отклонение</th></tr></thead>
         <tbody>
-          <tr><td>Фрахт (тайм-чартер)<div class="muted">${fmtMoney(k.hireRate)} в сутки</div></td><td class="r">${fmtNum(k.days)}</td><td></td><td></td><td class="money">${fmtMoney(k.hire)}</td></tr>
+          <tr><td>Фрахт (тайм-чартер)<div class="muted">${fmtMoney(k.hireRate)} в сутки</div></td><td class="r">${fmtNum(k.days)}</td><td></td><td></td>${comparison(plan.hire, k.hire)}</tr>
           ${fr('Топливо на переходах', 'sea', 'время в пути')}
           ${fr('Топливо на стоянке', 'port', 'запас, ожидание, операции береговыми кранами')}
           ${fr('Топливо при грузовых операциях судовыми кранами', 'cranes', 'операции в портах с судовыми кранами')}
           <tr class="total"><td>Итого топливо<div class="muted" style="font-weight:400">тяж. ${fmtNum(k.fuelHfo, 1)} т × ${fmtMoney(num0(state.costs.hfo))} + диз. ${fmtNum(k.fuelMgo, 1)} т × ${fmtMoney(num0(state.costs.mgo))}</div></td>
-            <td class="r">${fmtNum(k.fuel.sea.days + k.fuel.port.days + k.fuel.cranes.days)}</td><td class="r">${fmtNum(k.fuelHfo, 1)}</td><td class="r">${fmtNum(k.fuelMgo, 1)}</td><td class="money">${fmtMoney(k.fuelCost)}</td></tr>
-          <tr class="grand"><td>ИТОГО расходы по рейсу</td><td class="r">${fmtNum(k.days)}</td><td></td><td></td><td class="money">${fmtMoney(k.total)}</td></tr>
-          <tr class="sub"><td>Средние расходы в сутки</td><td></td><td></td><td></td><td class="money">${k.days > 0 ? fmtMoney(k.total / k.days) : '—'}</td></tr>
+            <td class="r">${fmtNum(k.fuel.sea.days + k.fuel.port.days + k.fuel.cranes.days)}</td><td class="r">${fmtNum(k.fuelHfo, 1)}</td><td class="r">${fmtNum(k.fuelMgo, 1)}</td>${comparison(plan.fuelCost, k.fuelCost)}</tr>
+          <tr class="grand"><td>ИТОГО расходы по рейсу</td><td class="r">${fmtNum(k.days)}</td><td></td><td></td>${comparison(plan.total, k.total)}</tr>
+          <tr class="sub"><td>Средние расходы в сутки</td><td></td><td></td><td></td>${comparison(plan.days > 0 ? plan.total / plan.days : null, k.days > 0 ? k.total / k.days : null)}</tr>
         </tbody></table></div>
         ${sh && !num0(sh.hire) ? '<div class="warnbox">⚠ Для судна не задана ставка фрахта.</div>' : ''}`;
     } else h += '<p class="hint">Нет рейсов.</p>';
@@ -1171,12 +1150,12 @@
         tot.plan += plan.total;
         tot.days += k.days; tot.hire += k.hire; tot.fuel += k.fuelCost; tot.total += k.total; tot.hfo += k.fuelHfo; tot.mgo += k.fuelMgo;
         return `<tr><td>${esc(x.name)}</td><td>${esc(k.ship ? k.ship.name : '—')}</td><td>${fmtD(timeline?.start ?? c.start)} — ${fmtD(timeline?.end ?? c.end)}<div class="muted">${basis}</div></td><td class="r">${fmtNum(k.days)}</td>
-          <td class="money">${fmtMoney(k.hire)}</td><td class="r">${fmtNum(k.fuelHfo, 1)}</td><td class="r">${fmtNum(k.fuelMgo, 1)}</td><td class="money">${fmtMoney(k.fuelCost)}</td><td class="money">${fmtMoney(plan.total)}</td><td class="money"><b>${fmtMoney(k.total)}</b></td></tr>`;
+          <td class="money">${fmtMoney(k.hire)}</td><td class="r">${fmtNum(k.fuelHfo, 1)}</td><td class="r">${fmtNum(k.fuelMgo, 1)}</td><td class="money">${fmtMoney(k.fuelCost)}</td><td class="money">${fmtMoney(plan.total)}</td><td class="money"><b>${fmtMoney(k.total)}</b></td><td class="money">${timeline ? costDelta(plan.total, k.total) : '—'}</td></tr>`;
       }).join('');
       h += `<h3>Сводка по всем рейсам</h3><div class="scroll-x"><table class="grid">
-        <thead><tr><th>Рейс</th><th>Судно</th><th>Период</th><th class="r">Сутки</th><th class="r">Фрахт</th><th class="r">Тяж., т</th><th class="r">Диз., т</th><th class="r">Топливо</th><th class="r">По плану</th><th class="r">Итого</th></tr></thead>
+        <thead><tr><th>Рейс</th><th>Судно</th><th>Период</th><th class="r">Сутки</th><th class="r">Фрахт</th><th class="r">Тяж., т</th><th class="r">Диз., т</th><th class="r">Топливо</th><th class="r">По плану</th><th class="r">Итого</th><th class="r">Отклонение</th></tr></thead>
         <tbody>${rows}</tbody>
-        <tfoot><tr class="total"><td colspan="3">Итого</td><td class="r">${fmtNum(tot.days)}</td><td class="money">${fmtMoney(tot.hire)}</td><td class="r">${fmtNum(tot.hfo, 1)}</td><td class="r">${fmtNum(tot.mgo, 1)}</td><td class="money">${fmtMoney(tot.fuel)}</td><td class="money">${fmtMoney(tot.plan)}</td><td class="money">${fmtMoney(tot.total)}</td></tr></tfoot>
+        <tfoot><tr class="total"><td colspan="3">Итого</td><td class="r">${fmtNum(tot.days)}</td><td class="money">${fmtMoney(tot.hire)}</td><td class="r">${fmtNum(tot.hfo, 1)}</td><td class="r">${fmtNum(tot.mgo, 1)}</td><td class="money">${fmtMoney(tot.fuel)}</td><td class="money">${fmtMoney(tot.plan)}</td><td class="money">${fmtMoney(tot.total)}</td><td></td></tr></tfoot>
       </table></div>`;
     }
     box.innerHTML = h;
@@ -1191,7 +1170,6 @@
   function applyField(el) {
     const key = el.dataset.k;
     if (key === 'sel') { state.settings.sel = el.value; return; }
-    if (sharedView) return;
     const [kind, id, path] = key.split(':');
     let obj = null;
     if (kind === 'voy') obj = state.voyages.find(x => x.id === id);
@@ -1371,13 +1349,6 @@
     'export-json': () => {
       const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
       download(blob, `voyages_${isoDate(Date.now())}.json`);
-    },
-    'publish-shared': () => {
-      if (!publishTemplate) return;
-      const payload = { publishedAt: new Date().toISOString(), data: sharedOf(state) };
-      $('#sharedSnapshot', publishTemplate).textContent = JSON.stringify(payload).replace(/</g, '\\u003c');
-      const html = '<!DOCTYPE html>\n' + publishTemplate.outerHTML;
-      download(new Blob([html], { type: 'text/html;charset=utf-8' }), 'shared-plan.html');
     },
     'import-json': () => $('#fileInput').click(),
     'export-png': () => exportPng(),
@@ -1849,8 +1820,7 @@
       <td>${fmtDT(s.end)}</td>
       <td class="r">${fmtNum(s.days)}</td>
       <td class="r">${fmtHours(s.days)}</td></tr>`).join('');
-    sec.innerHTML = `${sharedView ? `<label class="no-print">Рейс <select data-k="sel">${voyageOptions(v)}</select></label>` : ''}
-      <h2>${esc(v.name || 'Рейс')}</h2>
+    sec.innerHTML = `<h2>${esc(v.name || 'Рейс')}</h2>
       <div class="muted" style="margin-bottom:8px">Судно: <b>${esc(ship ? ship.name : '—')}</b> · начало ${fmtDT(c.start)} · окончание ${fmtDT(c.end)}</div>
       <div class="scroll-x">
       <table class="grid">
@@ -1865,7 +1835,7 @@
 
   function factTableHtml(c) {
     const fx = c.fx, n = c.stopTimes.length;
-    if (!fx.hasFact) return sharedView ? '' : `<p class="hint no-print" style="margin-top:10px">Фактические даты рейса вносятся на вкладке <button class="link" data-act="tab" data-tab="fact">«Факт»</button>.</p>`;
+    if (!fx.hasFact) return `<p class="hint no-print" style="margin-top:10px">Фактические даты рейса вносятся на вкладке <button class="link" data-act="tab" data-tab="fact">«Факт»</button>.</p>`;
     const rows = fx.ev.map((e, i) => {
       const prev = fx.ev[i - 1];
       const stage = prev ? FACT_STAGE_LABEL[factStage(prev, e)] : '—';
@@ -1895,7 +1865,7 @@
     $('#viewChart').hidden = mt === 'costs';
     $('#viewCosts').hidden = mt !== 'costs';
     fitChartHeight();
-    if (!sharedView && mt !== 'gantt') renderSidebar();
+    if (mt !== 'gantt') renderSidebar();
     renderChart(scrollToday);
     renderTable();
     renderCosts();
@@ -1912,17 +1882,17 @@
 
   // Синхронизация между вкладками браузера
   window.addEventListener('storage', e => {
-    if (sharedView || srv.on || e.key !== STORE_KEY || !e.newValue) return;
+    if (srv.on || e.key !== STORE_KEY || !e.newValue) return;
     try { state = normalize(JSON.parse(e.newValue)); applySizes(); renderAll(); } catch (_) { }
   });
   window.addEventListener('beforeprint', setPrintTitle);
   window.addEventListener('pagehide', save);
 
-  if (!sharedView) try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (_) { }
+  try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (_) { }
   applySizes();
-  if (sharedView) renderSaveBar(); else save();
+  save();
   renderAll(true);
-  if (!sharedView) initServer().then(on => { if (!on) restoreFileHandle(); });
+  initServer().then(on => { if (!on) restoreFileHandle(); });
 })();
 </script>
 </body>
