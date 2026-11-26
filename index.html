@@ -741,6 +741,8 @@
 
   /* ================= Факт: контрольные точки ================= */
   const EV_LABEL = { arr: 'Приход', unloadStart: 'Начало выгрузки', unloadEnd: 'Окончание выгрузки', loadStart: 'Начало погрузки', loadEnd: 'Окончание погрузки', dep: 'Отход' };
+  const factStage = (a, b) => a.key === 'dep' && b.key === 'arr' ? 'transit'
+    : a.key.endsWith('Start') && b.key === a.key.replace('Start', 'End') ? a.key.replace('Start', '') : 'stay';
   function evLabel(e, n) {
     if (e.key === 'arr' && e.stopIdx === 0) return 'Приход (начало рейса)';
     if (e.key === 'dep' && e.stopIdx === n - 1) return 'Отход (окончание рейса)';
@@ -841,11 +843,41 @@
   }
 
   // Расходы по тайм-чартеру
-  function voyageCosts(v, c) {
+  function costTimeline(c) {
+    const { ev, hasFact, lastIdx, end } = c.fx;
+    if (!hasFact || ev.some((e, i) => e.bad || (i > 0 && e.plan < ev[i - 1].plan))) return null;
+    const times = ev.map(e => e.fact);
+    let prev = -1;
+    for (let i = 0; i <= lastIdx; i++) {
+      if (times[i] == null) continue;
+      for (let j = prev + 1; j < i; j++) {
+        if (prev < 0) {
+          times[j] = times[i] - (ev[i].plan - ev[j].plan);
+        } else {
+          const span = ev[i].plan - ev[prev].plan;
+          const fraction = span > 0 ? (ev[j].plan - ev[prev].plan) / span : (j - prev) / (i - prev);
+          times[j] = times[prev] + fraction * (times[i] - times[prev]);
+        }
+      }
+      prev = i;
+    }
+    for (let i = lastIdx + 1; i < ev.length; i++) times[i] = ev[i].forecast;
+
+    const modes = { sea: 0, port: 0, cranes: 0 };
+    for (let i = 1; i < ev.length; i++) {
+      const a = ev[i - 1], stage = factStage(a, ev[i]);
+      const mode = stage === 'transit' ? 'sea'
+        : stage !== 'stay' && portById(a.portId)?.shipCranes ? 'cranes' : 'port';
+      modes[mode] += (times[i] - times[i - 1]) / DAY;
+    }
+    return { modes, start: times[0], end, complete: ev.every(e => e.fact != null) };
+  }
+
+  function voyageCosts(v, c, timeline = null) {
     const ship = shipById(v.shipId);
     const cons = (ship && ship.cons) || emptyCons();
-    const days = { sea: c.totals.transit, port: 0, cranes: 0 };
-    c.segs.forEach(s => {
+    const days = timeline ? timeline.modes : { sea: c.totals.transit, port: 0, cranes: 0 };
+    if (!timeline) c.segs.forEach(s => {
       if (s.type === 'reserve') days.port += s.days;
       if (s.type === 'load' || s.type === 'unload') days[s.cranes ? 'cranes' : 'port'] += s.days;
     });
@@ -857,9 +889,10 @@
       fH += h; fM += m;
     }
     const hireRate = ship ? num0(ship.hire) : 0;
-    const hire = c.days * hireRate;
+    const duration = timeline ? (timeline.end - timeline.start) / DAY : c.days;
+    const hire = duration * hireRate;
     const fuelCost = fH * pH + fM * pM;
-    return { ship, hireRate, hire, fuel, fuelHfo: fH, fuelMgo: fM, fuelCost, total: hire + fuelCost, days: c.days };
+    return { ship, hireRate, hire, fuel, fuelHfo: fH, fuelMgo: fM, fuelCost, total: hire + fuelCost, days: duration };
   }
 
   /* ================= Боковая панель ================= */
@@ -1071,7 +1104,8 @@
     let h = `<h3>Расчёт рейса</h3>
       <div class="row no-print"><select data-k="sel" style="max-width:420px">${voyageOptions(v)}</select></div>`;
     if (v) {
-      const c = computeVoyage(v), k = voyageCosts(v, c);
+      const c = computeVoyage(v), plan = voyageCosts(v, c), timeline = costTimeline(c);
+      const k = timeline ? voyageCosts(v, c, timeline) : plan;
       const sh = k.ship;
       const cons = sh ? sh.cons : emptyCons();
       const fr = (label, key, note) => {
@@ -1079,7 +1113,10 @@
         return `<tr><td>${label}<div class="muted">${note} · ${fmtNum(num0(cons[key].hfo))} т/сут. тяж. + ${fmtNum(num0(cons[key].mgo))} т/сут. диз.</div></td>
           <td class="r">${fmtNum(f.days)}</td><td class="r">${fmtNum(f.hfo, 1)}</td><td class="r">${fmtNum(f.mgo, 1)}</td><td class="money">${fmtMoney(f.cost)}</td></tr>`;
       };
-      h += `<div class="muted" style="margin-bottom:6px">${esc(v.name)} · судно <b>${esc(sh ? sh.name : '—')}</b> · ${fmtDT(c.start)} — ${fmtDT(c.end)}</div>
+      h += `<div class="muted" style="margin-bottom:6px">${esc(v.name)} · судно <b>${esc(sh ? sh.name : '—')}</b> · ${fmtDT(timeline?.start ?? c.start)} — ${fmtDT(timeline?.end ?? c.end)}</div>
+      <p><b>${timeline ? timeline.complete ? 'По фактическим датам' : 'Оценка по факту и прогнозу' : 'По плановым датам'}</b>${timeline ? ` · по плану ${fmtMoney(plan.total)}` : ''}</p>
+      ${timeline && !timeline.complete ? '<p class="hint">Для точек без отметок используются расчётные даты.</p>' : ''}
+      ${c.fx.hasFact && !timeline ? '<div class="warnbox">⚠ Проверьте последовательность плановых и фактических дат. Показана стоимость по плану.</div>' : ''}
       <div class="scroll-x"><table class="grid calc">
         <thead><tr><th>Статья</th><th class="r">Сутки</th><th class="r">Тяжёлое, т</th><th class="r">Дизельное, т</th><th class="r">Сумма</th></tr></thead>
         <tbody>
@@ -1096,17 +1133,20 @@
     } else h += '<p class="hint">Нет рейсов.</p>';
 
     if (state.voyages.length) {
-      const tot = { days: 0, hire: 0, fuel: 0, total: 0, hfo: 0, mgo: 0 };
+      const tot = { days: 0, hire: 0, fuel: 0, total: 0, plan: 0, hfo: 0, mgo: 0 };
       const rows = state.voyages.map(x => {
-        const c = computeVoyage(x), k = voyageCosts(x, c);
+        const c = computeVoyage(x), plan = voyageCosts(x, c), timeline = costTimeline(c);
+        const k = timeline ? voyageCosts(x, c, timeline) : plan;
+        const basis = timeline ? timeline.complete ? 'Факт' : 'Оценка' : c.fx.hasFact ? 'План · проверьте даты' : 'План';
+        tot.plan += plan.total;
         tot.days += k.days; tot.hire += k.hire; tot.fuel += k.fuelCost; tot.total += k.total; tot.hfo += k.fuelHfo; tot.mgo += k.fuelMgo;
-        return `<tr><td>${esc(x.name)}</td><td>${esc(k.ship ? k.ship.name : '—')}</td><td>${fmtD(c.start)} — ${fmtD(c.end)}</td><td class="r">${fmtNum(k.days)}</td>
-          <td class="money">${fmtMoney(k.hire)}</td><td class="r">${fmtNum(k.fuelHfo, 1)}</td><td class="r">${fmtNum(k.fuelMgo, 1)}</td><td class="money">${fmtMoney(k.fuelCost)}</td><td class="money"><b>${fmtMoney(k.total)}</b></td></tr>`;
+        return `<tr><td>${esc(x.name)}</td><td>${esc(k.ship ? k.ship.name : '—')}</td><td>${fmtD(timeline?.start ?? c.start)} — ${fmtD(timeline?.end ?? c.end)}<div class="muted">${basis}</div></td><td class="r">${fmtNum(k.days)}</td>
+          <td class="money">${fmtMoney(k.hire)}</td><td class="r">${fmtNum(k.fuelHfo, 1)}</td><td class="r">${fmtNum(k.fuelMgo, 1)}</td><td class="money">${fmtMoney(k.fuelCost)}</td><td class="money">${fmtMoney(plan.total)}</td><td class="money"><b>${fmtMoney(k.total)}</b></td></tr>`;
       }).join('');
       h += `<h3>Сводка по всем рейсам</h3><div class="scroll-x"><table class="grid">
-        <thead><tr><th>Рейс</th><th>Судно</th><th>Период</th><th class="r">Сутки</th><th class="r">Фрахт</th><th class="r">Тяж., т</th><th class="r">Диз., т</th><th class="r">Топливо</th><th class="r">Итого</th></tr></thead>
+        <thead><tr><th>Рейс</th><th>Судно</th><th>Период</th><th class="r">Сутки</th><th class="r">Фрахт</th><th class="r">Тяж., т</th><th class="r">Диз., т</th><th class="r">Топливо</th><th class="r">По плану</th><th class="r">Итого</th></tr></thead>
         <tbody>${rows}</tbody>
-        <tfoot><tr class="total"><td colspan="3">Итого</td><td class="r">${fmtNum(tot.days)}</td><td class="money">${fmtMoney(tot.hire)}</td><td class="r">${fmtNum(tot.hfo, 1)}</td><td class="r">${fmtNum(tot.mgo, 1)}</td><td class="money">${fmtMoney(tot.fuel)}</td><td class="money">${fmtMoney(tot.total)}</td></tr></tfoot>
+        <tfoot><tr class="total"><td colspan="3">Итого</td><td class="r">${fmtNum(tot.days)}</td><td class="money">${fmtMoney(tot.hire)}</td><td class="r">${fmtNum(tot.hfo, 1)}</td><td class="r">${fmtNum(tot.mgo, 1)}</td><td class="money">${fmtMoney(tot.fuel)}</td><td class="money">${fmtMoney(tot.plan)}</td><td class="money">${fmtMoney(tot.total)}</td></tr></tfoot>
       </table></div>`;
     }
     box.innerHTML = h;
@@ -1160,7 +1200,7 @@
     const el = e.target; if (!el.dataset || !el.dataset.k || el.dataset.k === 'sel' || el.type === 'checkbox') return;
     applyField(el); save();
     renderChart(); renderTable();
-    if (/^(cost|shipc):/.test(el.dataset.k)) renderCostCalc();
+    if (state.settings.mainTab === 'costs') renderCostCalc();
   });
   document.addEventListener('change', e => {
     const el = e.target;
@@ -1604,13 +1644,11 @@
     // Полоса факта: интервалы между отмеченными контрольными точками
     function drawFact(v, c, sc, fy, voyTitle) {
       const fx = c.fx, ev = fx.ev, fh = 9, n = c.stopTimes.length;
-      const kind = (a, b) => a.key === 'dep' && b.key === 'arr' ? 'transit'
-        : a.key.endsWith('Start') && b.key === a.key.replace('Start', 'End') ? a.key.replace('Start', '') : 'stay';
       const col = k => k === 'transit' ? sc : COLORS[k] || '#868e96';
       const kName = { transit: 'Переход', load: 'Погрузка', unload: 'Выгрузка', stay: 'Стоянка / ожидание' };
       const planDur = (a, b) => (b.plan - a.plan) / DAY;
       const seg = (a, b, t1, t2, live) => {
-        const k = kind(a, b), x1 = X(t1), w = Math.max(X(t2) - x1, 1);
+        const k = factStage(a, b), x1 = X(t1), w = Math.max(X(t2) - x1, 1);
         const dur = (t2 - t1) / DAY;
         tips.push({ title: `Факт: ${kName[k]} — ${k === 'transit' ? portName(a.portId) + ' → ' + portName(b.portId) : portName(a.portId)}`,
           lines: [`${evLabel(a, n)}: ${fmtDT(t1)}`, live ? `Идёт сейчас (${fmtDT(t2)})` : `${evLabel(b, n)}: ${fmtDT(t2)}`,
